@@ -10,4 +10,5 @@ cd "$SCRIPT_PATH/../../tests" || exit
 
 echo "Starting databend-test"
 # The skip should be removed after https://github.com/datafuselabs/databend/issues/8107 is addressed.
-./databend-test --mode 'cluster' --run-dir 0_stateless --skip '13_0004_q4'
+#./databend-test --mode 'cluster' --run-dir 0_stateless --skip '13_0004_q4'
+./databend-test --mode 'cluster' test 13_0001_q1

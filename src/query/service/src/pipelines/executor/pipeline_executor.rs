@@ -11,8 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 use std::collections::VecDeque;
+use std::env;
 use std::sync::Arc;
 
 use common_base::base::catch_unwind;
@@ -29,6 +29,7 @@ use common_exception::ABORT_QUERY;
 use futures::future::select;
 use futures_util::future::Either;
 use parking_lot::Mutex;
+use tracing::info;
 
 use crate::pipelines::executor::executor_condvar::WorkersCondvar;
 use crate::pipelines::executor::executor_graph::RunningGraph;
@@ -74,6 +75,7 @@ impl PipelineExecutor {
         )
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "PipelineExecutor.from_pipelines")]
     pub fn from_pipelines(
         mut pipelines: Vec<Pipeline>,
         settings: ExecutorSettings,
@@ -163,10 +165,14 @@ impl PipelineExecutor {
         self.global_tasks_queue.is_finished()
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "PipelineExecutor.execute")]
     pub fn execute(self: &Arc<Self>) -> Result<()> {
         self.init()?;
 
-        self.start_executor_daemon()?;
+        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
+        info!("node name:{}", node_name);
+
+        self.start_executor_daemon()?; // may stop continue to execute threads?
 
         let mut thread_join_handles = self.execute_threads(self.threads_num);
 
@@ -231,7 +237,9 @@ impl PipelineExecutor {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "PipelineExecutor.execute_threads")]
     fn execute_threads(self: &Arc<Self>, threads: usize) -> Vec<ThreadJoinHandle<Result<()>>> {
+        info!("execute_threads, thread count: {}", threads);
         let mut thread_join_handles = Vec::with_capacity(threads);
 
         for thread_num in 0..threads {
@@ -281,7 +289,15 @@ impl PipelineExecutor {
     /// # Safety
     ///
     /// Method is thread unsafe and require thread safe call
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        name = "PipelineExecutor.execute_single_thread"
+    )]
     pub unsafe fn execute_single_thread(&self, thread_num: usize) -> Result<()> {
+        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
+        info!("node name:{}", node_name);
+
         let workers_condvar = self.workers_condvar.clone();
         let mut context = ExecutorWorkerContext::create(thread_num, workers_condvar);
 

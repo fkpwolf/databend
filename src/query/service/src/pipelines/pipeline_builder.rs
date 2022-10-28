@@ -113,6 +113,7 @@ impl PipelineBuilder {
     }
 
     fn build_pipeline(&mut self, plan: &PhysicalPlan) -> Result<()> {
+        print!("build_pipeline:{:?}", plan);
         match plan {
             PhysicalPlan::TableScan(scan) => self.build_table_scan(scan),
             PhysicalPlan::Filter(filter) => self.build_filter(filter),
@@ -130,7 +131,7 @@ impl PipelineBuilder {
                 self.build_distributed_insert_select(insert_select)
             }
             PhysicalPlan::Exchange(_) => Err(ErrorCode::LogicalError(
-                "Invalid physical plan with PhysicalPlan::Exchange",
+                "Invalid physical plan with PhysicalPlan::Exchange", // not implemented?
             )),
         }
     }

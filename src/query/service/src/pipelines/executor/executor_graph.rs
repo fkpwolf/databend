@@ -92,6 +92,7 @@ impl ExecutingGraph {
     pub fn create(pipeline: Pipeline) -> Result<ExecutingGraph> {
         let mut graph = StableGraph::new();
         Self::init_graph(&pipeline, &mut graph);
+        debug!("Create executing graph:{:?}", graph);
         Ok(ExecutingGraph { graph })
     }
 
@@ -101,10 +102,11 @@ impl ExecutingGraph {
         for pipeline in &pipelines {
             Self::init_graph(pipeline, &mut graph);
         }
-
+        debug!("Create executing graph:{:?}", graph);
         Ok(ExecutingGraph { graph })
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "executor_graph.init_graph")]
     fn init_graph(pipeline: &Pipeline, graph: &mut StableGraph<Arc<Node>, ()>) {
         let mut node_stack = Vec::new();
         let mut edge_stack: Vec<Arc<OutputPort>> = Vec::new();
@@ -125,11 +127,12 @@ impl ExecutingGraph {
                         let source_index = node_stack[index];
                         let edge_index = graph.add_edge(source_index, target_index, ());
 
-                        let input_trigger = resize_node.create_trigger(edge_index);
+                        let input_trigger = resize_node.create_trigger(edge_index); // callback?
                         inputs_port[index].set_trigger(input_trigger);
                         edge_stack[index]
                             .set_trigger(graph[source_index].create_trigger(edge_index));
                         connect(&inputs_port[index], &edge_stack[index]);
+                        print!("-----1");
                     }
 
                     node_stack.clear();
@@ -144,6 +147,7 @@ impl ExecutingGraph {
                     inputs_port,
                     outputs_port,
                 } => unsafe {
+                    print!("-----2");
                     assert_eq!(node_stack.len(), inputs_port.len());
                     assert!(inputs_port.is_empty() || inputs_port.len() == processors.len());
                     assert!(outputs_port.is_empty() || outputs_port.len() == processors.len());
@@ -167,6 +171,8 @@ impl ExecutingGraph {
                             Node::create(&processors[index], &p_inputs_port, &p_outputs_port);
                         let target_index = graph.add_node(target_node.clone());
                         processors[index].set_id(target_index);
+
+                        debug!("target_node:{:?}\n", target_node);
 
                         if !node_stack.is_empty() {
                             let source_index = node_stack[index];
@@ -209,6 +215,7 @@ impl ExecutingGraph {
     /// # Safety
     ///
     /// Method is thread unsafe and require thread safe call
+    #[tracing::instrument(level = "debug", skip_all)]
     pub unsafe fn schedule_queue(
         locker: &StateLockGuard,
         index: NodeIndex,

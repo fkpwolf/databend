@@ -34,6 +34,7 @@ use tonic::Request;
 use tonic::Response as RawResponse;
 use tonic::Status;
 use tonic::Streaming;
+use tracing::info;
 
 use crate::api::rpc::flight_actions::FlightAction;
 use crate::api::rpc::flight_client::FlightExchange;
@@ -101,7 +102,9 @@ impl FlightService for DatabendQueryFlightService {
         Err(Status::unimplemented("unimplement do_get"))
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn do_exchange(&self, req: StreamReq<FlightData>) -> Response<Self::DoExchangeStream> {
+        info!("do_exchange: {:?}", req);
         match req.get_metadata("x-type")?.as_str() {
             "request_server_exchange" => {
                 let query_id = req.get_metadata("x-query-id")?;
@@ -132,7 +135,7 @@ impl FlightService for DatabendQueryFlightService {
 
     type DoActionStream = FlightStream<FlightResult>;
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, name = "FlightService.do_action")]
     async fn do_action(&self, request: Request<Action>) -> Response<Self::DoActionStream> {
         common_tracing::extract_remote_span_as_parent(&request);
 

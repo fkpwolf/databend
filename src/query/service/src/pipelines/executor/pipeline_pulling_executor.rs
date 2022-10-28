@@ -138,6 +138,7 @@ impl PipelinePullingExecutor {
         })
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "PipelinePullingExecutor.start")]
     pub fn start(&mut self) {
         let state = self.state.clone();
         let threads_executor = self.executor.clone();

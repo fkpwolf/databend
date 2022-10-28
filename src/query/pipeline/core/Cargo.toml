@@ -15,10 +15,12 @@ test = false
 common-datablocks = { path = "../../datablocks" }
 common-exception = { path = "../../../common/exception" }
 common-io = { path = "../../../common/io" }
+common-tracing = { path = "../../../common/tracing" }
 
 async-trait = "0.1.57"
 futures = "0.3.24"
 petgraph = "0.6.2"
+tracing = "0.1.36"
 
 [dev-dependencies]
 tokio = { version = "1.21.1", features = ["full"] }

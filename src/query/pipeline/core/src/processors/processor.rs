@@ -14,6 +14,7 @@
 
 use std::any::Any;
 use std::cell::UnsafeCell;
+use std::env;
 use std::sync::Arc;
 
 use common_exception::ErrorCode;
@@ -22,6 +23,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use petgraph::graph::node_index;
 use petgraph::prelude::NodeIndex;
+use tracing::info;
 
 #[derive(Debug)]
 pub enum Event {
@@ -105,8 +107,12 @@ impl ProcessorPtr {
     }
 
     /// # Safety
+    #[tracing::instrument(level = "debug", skip_all, name = "ProcessorPtr.process")]
     pub unsafe fn process(&self) -> Result<()> {
-        (*self.inner.get()).process()
+        let p = self.inner.get();
+        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
+        info!("execute process:{} on {}", (*p).name(), node_name);
+        (*p).process()
     }
 
     /// # Safety

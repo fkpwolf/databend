@@ -6,6 +6,8 @@ SCRIPT_PATH="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)"
 cd "$SCRIPT_PATH/../../.." || exit
 BUILD_PROFILE=${BUILD_PROFILE:-debug}
 
+echo "build profile $BUILD_PROFILE"
+
 # Caveat: has to kill query first.
 # `query` tries to remove its liveness record from meta before shutting down.
 # If meta is stopped, `query` will receive an error that hangs graceful
@@ -35,19 +37,19 @@ nohup ./target/${BUILD_PROFILE}/databend-meta -c scripts/ci/deploy/config/databe
 python3 scripts/ci/wait_tcp.py --timeout 5 --port 28302
 
 echo 'Start databend-query node-1'
-env "RUST_BACKTRACE=1" nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-1.toml &
+env RUST_BACKTRACE=1 RUST_LOG=DEBUG DATABEND_JAEGER_AGENT_ENDPOINT=172.17.0.3:6831 NODE_NAME=node1 nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-1.toml &
 
 echo "Waiting on node-1..."
 python3 scripts/ci/wait_tcp.py --timeout 5 --port 9091
 
 echo 'Start databend-query node-2'
-env "RUST_BACKTRACE=1" nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-2.toml &
+env RUST_BACKTRACE=1 RUST_LOG=DEBUG DATABEND_JAEGER_AGENT_ENDPOINT=172.17.0.3:6831 NODE_NAME=node2 nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-2.toml &
 
 echo "Waiting on node-2..."
 python3 scripts/ci/wait_tcp.py --timeout 5 --port 9092
 
 echo 'Start databend-query node-3'
-env "RUST_BACKTRACE=1" nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-3.toml &
+env RUST_BACKTRACE=1 RUST_LOG=DEBUG DATABEND_JAEGER_AGENT_ENDPOINT=172.17.0.3:6831 NODE_NAME=node3 nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-3.toml &
 
 echo "Waiting on node-3..."
 python3 scripts/ci/wait_tcp.py --timeout 5 --port 9093

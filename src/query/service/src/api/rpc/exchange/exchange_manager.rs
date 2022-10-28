@@ -29,6 +29,7 @@ use common_grpc::ConnectionFactory;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use parking_lot::ReentrantMutex;
+use tracing::info;
 
 use crate::api::rpc::exchange::exchange_params::ExchangeParams;
 use crate::api::rpc::exchange::exchange_params::MergeExchangeParams;
@@ -143,6 +144,7 @@ impl DataExchangeManager {
     }
 
     // Execute query in background
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn execute_partial_query(&self, query_id: &str) -> Result<()> {
         let queries_coordinator_guard = self.queries_coordinator.lock();
         let queries_coordinator = unsafe { &mut *queries_coordinator_guard.deref().get() };
@@ -157,6 +159,7 @@ impl DataExchangeManager {
     }
 
     // Create a pipeline based on query plan
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn init_query_fragments_plan(
         &self,
         ctx: &Arc<QueryContext>,
@@ -187,6 +190,7 @@ impl DataExchangeManager {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn handle_exchange_fragment(
         &self,
         query: String,
@@ -194,6 +198,10 @@ impl DataExchangeManager {
         fragment: usize,
         exchange: FlightExchange,
     ) -> Result<()> {
+        info!(
+            "handle_exchange_fragment: query {}, source {}",
+            query, source
+        );
         let queries_coordinator_guard = self.queries_coordinator.lock();
         let queries_coordinator = unsafe { &mut *queries_coordinator_guard.deref().get() };
 
@@ -431,6 +439,7 @@ impl QueryCoordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "QueryCoordinator.prepare_pipeline")]
     pub fn prepare_pipeline(
         &mut self,
         ctx: &Arc<QueryContext>,
@@ -460,6 +469,11 @@ impl QueryCoordinator {
         Ok(())
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        name = "QueryCoordinator.subscribe_fragment"
+    )]
     pub fn subscribe_fragment(
         &mut self,
         ctx: &Arc<QueryContext>,
@@ -514,6 +528,7 @@ impl QueryCoordinator {
         // Do something when query finished.
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "QueryCoordinator.execute_pipeline")]
     pub fn execute_pipeline(&mut self) -> Result<()> {
         if self.fragments_coordinator.is_empty() {
             // Empty fragments if it is a request server, because the pipelines may have been linked.
