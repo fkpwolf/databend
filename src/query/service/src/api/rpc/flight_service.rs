@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::convert::TryInto;
+use std::env;
 use std::pin::Pin;
 
 use common_arrow::arrow_format::flight::data::Action;
@@ -102,9 +103,9 @@ impl FlightService for DatabendQueryFlightService {
         Err(Status::unimplemented("unimplement do_get"))
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[tracing::instrument(level = "debug", skip_all, name = "FlightService.do_exchange")]
     async fn do_exchange(&self, req: StreamReq<FlightData>) -> Response<Self::DoExchangeStream> {
-        info!("do_exchange: {:?}", req);
+        info!("do_exchange:\n{:?}", req);
         match req.get_metadata("x-type")?.as_str() {
             "request_server_exchange" => {
                 let query_id = req.get_metadata("x-query-id")?;
@@ -139,8 +140,16 @@ impl FlightService for DatabendQueryFlightService {
     async fn do_action(&self, request: Request<Action>) -> Response<Self::DoActionStream> {
         common_tracing::extract_remote_span_as_parent(&request);
 
+        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
+        info!(
+            "execute do_action on {} with request:\n{:?}",
+            node_name, request
+        );
+
         let action = request.into_inner();
         let flight_action: FlightAction = action.try_into()?;
+
+        info!("{:?}", flight_action);
 
         let action_result = match &flight_action {
             FlightAction::InitQueryFragmentsPlan(init_query_fragments_plan) => {

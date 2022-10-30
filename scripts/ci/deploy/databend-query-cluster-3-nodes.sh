@@ -6,7 +6,9 @@ SCRIPT_PATH="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)"
 cd "$SCRIPT_PATH/../../.." || exit
 BUILD_PROFILE=${BUILD_PROFILE:-debug}
 
-echo "build profile $BUILD_PROFILE"
+echo "build_profile: $BUILD_PROFILE"
+
+cargo build
 
 # Caveat: has to kill query first.
 # `query` tries to remove its liveness record from meta before shutting down.

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::env;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
@@ -312,6 +313,7 @@ impl<W: AsyncWrite + Send + Unpin> InteractiveWorkerBase<W> {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn do_query(&mut self, query: &str) -> Result<QueryResult> {
+        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
         match self.federated_server_command_check(query) {
             Some(data_block) => {
                 info!("Federated query: {}", query);
@@ -329,7 +331,7 @@ impl<W: AsyncWrite + Send + Unpin> InteractiveWorkerBase<W> {
                 ))
             }
             None => {
-                info!("Normal query: {}", query);
+                info!("Normal query: {} on {}", query, node_name);
                 let context = self.session.create_query_context().await?;
 
                 let mut planner = Planner::new(context.clone());
