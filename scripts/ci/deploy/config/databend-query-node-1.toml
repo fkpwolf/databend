@@ -6,7 +6,7 @@ max_active_sessions = 256
 wait_timeout_mills = 5000
 
 # For flight rpc.
-flight_api_address = "0.0.0.0:9090"
+flight_api_address = "0.0.0.0:9091"
 
 # Databend Query http address.
 # For admin RESET API.
@@ -41,8 +41,8 @@ table_cache_bloom_index_meta_count=3000
 table_cache_bloom_index_data_bytes=1073741824
 
 [log]
-level = "ERROR"
-dir = "./.databend/logs"
+level = "DEBUG"
+dir = "./.databend/logs-query-1"
 query_enabled = true
 
 [meta]
@@ -57,7 +57,7 @@ auto_sync_interval = 60
 # Storage config.
 [storage]
 # fs | s3 | azblob | obs
-type = "fs"
+type = "s3"
 
 # Set a local folder to store your data.
 # Comment out this block if you're NOT using local file system as storage.
@@ -65,11 +65,11 @@ type = "fs"
 data_path = "./.databend/stateless_test_data"
 
 # To use S3-compatible object storage, uncomment this block and set your values.
-# [storage.s3]
-# bucket = "<your-bucket-name>"
-# endpoint_url = "<your-endpoint>"
-# access_key_id = "<your-key-id>"
-# secret_access_key = "<your-account-key>"
+[storage.s3]
+bucket = "databend"
+endpoint_url = "http://172.17.0.4:9000"
+access_key_id = "minioadmin"
+secret_access_key = "minioadmin"
 
 # To use Azure Blob storage, uncomment this block and set your values.
 # [storage.azblob]

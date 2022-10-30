@@ -23,6 +23,7 @@ use common_exception::ErrorCode;
 use common_exception::Result;
 use common_meta_types::NodeInfo;
 use itertools::Itertools;
+use tracing::info;
 
 use crate::api::ConnectionInfo;
 use crate::api::DataExchange;
@@ -170,23 +171,53 @@ impl QueryFragmentsActions {
     pub fn get_query_fragments_plan_packets(
         &self,
     ) -> Result<(QueryFragmentsPlanPacket, Vec<QueryFragmentsPlanPacket>)> {
+        info!("get_query_fragments_plan_packets execute");
         let nodes_info = Self::nodes_info(&self.ctx);
+
+        for (key, value) in nodes_info.clone().into_iter() {
+            info!(
+                "get_query_fragments_plan_packets print nodes info {} / {} / {}",
+                key, value.flight_address, value.id
+            );
+        }
 
         let mut fragments_packets = self.get_executors_fragments();
         let mut query_fragments_plan_packets = Vec::with_capacity(fragments_packets.len());
 
         let cluster = self.ctx.get_cluster();
+        let local_fragment = fragments_packets.remove(&cluster.local_id).unwrap();
         let local_query_fragments_plan_packet = QueryFragmentsPlanPacket::create(
             self.ctx.get_id(),
             cluster.local_id.clone(),
-            fragments_packets.remove(&cluster.local_id).unwrap(),
+            local_fragment.clone(),
             nodes_info.clone(),
             cluster.local_id(),
+        );
+
+        info!(
+            "get_query_fragments_plan_packets locale executor:{}, query id: {}, request_executor: {}, fragments: {:?}",
+            cluster.local_id.clone(),
+            self.ctx.get_id(),
+            cluster.local_id(),
+            local_fragment.clone()
         );
 
         for (executor, fragments) in fragments_packets.into_iter() {
             let query_id = self.ctx.get_id();
             let executors_info = nodes_info.clone();
+            // send every query fragments to all nodes?
+            // No, it is S3 file fragment
+            // like segment_location\":[\"1/16/_sg/2a64b4f521e5481e897fb96fa49016dc_v1.json
+            // each fragment starts with ExchangeSink. No limit fragment?
+            // 3 fragments(1 locale, 2 other) if has 3 nodes in cluster
+
+            info!(
+                "get_query_fragments_plan_packets executor:{}, query id: {}, request_executor: {}, fragments: {:?}",
+                executor,
+                query_id,
+                cluster.local_id(),
+                fragments
+            );
 
             query_fragments_plan_packets.push(QueryFragmentsPlanPacket::create(
                 query_id,

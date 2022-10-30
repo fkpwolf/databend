@@ -236,6 +236,7 @@ impl DataExchangeManager {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit_actions(
         &self,
         ctx: Arc<QueryContext>,
@@ -255,7 +256,7 @@ impl DataExchangeManager {
         let (local_query_fragments_plan_packet, query_fragments_plan_packets) =
             actions.get_query_fragments_plan_packets()?;
 
-        // Submit tasks to other nodes
+        // Submit tasks to other nodes!!!
         query_fragments_plan_packets
             .commit(&self.config, timeout)
             .await?;

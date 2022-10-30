@@ -329,7 +329,7 @@ impl<W: AsyncWrite + Send + Unpin> InteractiveWorkerBase<W> {
                 ))
             }
             None => {
-                info!("Normal query: 123456{}", query);
+                info!("Normal query: {}", query);
                 let context = self.session.create_query_context().await?;
 
                 let mut planner = Planner::new(context.clone());

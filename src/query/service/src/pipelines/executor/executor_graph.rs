@@ -132,7 +132,6 @@ impl ExecutingGraph {
                         edge_stack[index]
                             .set_trigger(graph[source_index].create_trigger(edge_index));
                         connect(&inputs_port[index], &edge_stack[index]);
-                        print!("-----1");
                     }
 
                     node_stack.clear();
@@ -147,7 +146,6 @@ impl ExecutingGraph {
                     inputs_port,
                     outputs_port,
                 } => unsafe {
-                    print!("-----2");
                     assert_eq!(node_stack.len(), inputs_port.len());
                     assert!(inputs_port.is_empty() || inputs_port.len() == processors.len());
                     assert!(outputs_port.is_empty() || outputs_port.len() == processors.len());
@@ -171,8 +169,6 @@ impl ExecutingGraph {
                             Node::create(&processors[index], &p_inputs_port, &p_outputs_port);
                         let target_index = graph.add_node(target_node.clone());
                         processors[index].set_id(target_index);
-
-                        debug!("target_node:{:?}\n", target_node);
 
                         if !node_stack.is_empty() {
                             let source_index = node_stack[index];
@@ -251,7 +247,7 @@ impl ExecutingGraph {
                 let event = node.processor.event()?;
                 if tracing::enabled!(tracing::Level::TRACE) {
                     tracing::trace!(
-                        "node id: {:?}, name: {:?}, event: {:?}",
+                        "node id: {:?}, name: {:?}, event: {:?}", //???
                         node.processor.id(),
                         node.processor.name(),
                         event

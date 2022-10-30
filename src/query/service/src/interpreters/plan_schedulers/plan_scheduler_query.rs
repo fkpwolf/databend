@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use common_exception::Result;
+use tracing::info;
 
 use crate::interpreters::fragments::Fragmenter;
 use crate::interpreters::fragments::QueryFragmentsActions;
@@ -25,11 +26,13 @@ use crate::sessions::TableContext;
 use crate::sql::executor::PhysicalPlan;
 use crate::sql::ColumnBinding;
 
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn schedule_query_v2(
     ctx: Arc<QueryContext>,
     result_columns: &[ColumnBinding],
     plan: &PhysicalPlan,
 ) -> Result<PipelineBuildResult> {
+    info!("schedule_query_v2 1");
     if !plan.is_distributed_plan() {
         let pb = PipelineBuilder::create(ctx.clone());
         let mut build_res = pb.finalize(plan)?;
@@ -42,17 +45,18 @@ pub async fn schedule_query_v2(
         build_res.set_max_threads(ctx.get_settings().get_max_threads()? as usize);
         return Ok(build_res);
     }
-
+    info!("schedule_query_v2 2");
     let mut build_res = build_schedule_pipeline(ctx.clone(), plan).await?;
-
+    info!("schedule_query_v2 3");
     let input_schema = plan.output_schema()?;
+    info!("schedule_query_v2 4");
     PipelineBuilder::render_result_set(
         &ctx.try_get_function_context()?,
         input_schema,
         result_columns,
         &mut build_res.main_pipeline,
     )?;
-
+    info!("schedule_query_v2 5");
     Ok(build_res)
 }
 
@@ -61,6 +65,7 @@ pub async fn build_schedule_pipeline(
     plan: &PhysicalPlan,
 ) -> Result<PipelineBuildResult> {
     let fragmenter = Fragmenter::try_create(ctx.clone())?;
+    info!("schedule_query_v2 PhysicalPlan:\n{}", plan.format_indent(1));
     let root_fragment = fragmenter.build_fragment(plan)?;
 
     let mut fragments_actions = QueryFragmentsActions::create(ctx.clone());
@@ -68,6 +73,12 @@ pub async fn build_schedule_pipeline(
 
     let exchange_manager = ctx.get_exchange_manager();
 
+    info!(
+        "schedule_query_v2 QueryFragmentActions:\n{}",
+        fragments_actions.display_indent()
+    );
+
+    // this takes most of time!!!
     let mut build_res = exchange_manager
         .commit_actions(ctx.clone(), fragments_actions)
         .await?;

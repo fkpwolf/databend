@@ -1859,9 +1859,11 @@ dependencies = [
  "common-datablocks",
  "common-exception",
  "common-io",
+ "common-tracing",
  "futures",
  "petgraph",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

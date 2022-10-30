@@ -239,7 +239,11 @@ impl PipelineExecutor {
 
     #[tracing::instrument(level = "debug", skip_all, name = "PipelineExecutor.execute_threads")]
     fn execute_threads(self: &Arc<Self>, threads: usize) -> Vec<ThreadJoinHandle<Result<()>>> {
-        info!("execute_threads, thread count: {}", threads);
+        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
+        info!(
+            "execute_threads, thread count: {} on node: {}",
+            threads, node_name
+        );
         let mut thread_join_handles = Vec::with_capacity(threads);
 
         for thread_num in 0..threads {

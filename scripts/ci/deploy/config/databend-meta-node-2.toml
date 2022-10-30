@@ -1,7 +1,7 @@
 # Usage:
 # databend-meta -c databend-meta-node-2.toml
 
-log_dir            = "./.databend/logs2"
+log_dir            = "./.databend/logs-meta-2"
 admin_api_address  = "0.0.0.0:28201"
 grpc_api_address   = "0.0.0.0:28202"
 
