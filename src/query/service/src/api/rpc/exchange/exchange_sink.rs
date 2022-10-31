@@ -35,6 +35,7 @@ impl ExchangeSink {
     ) -> Result<()> {
         match params {
             ExchangeParams::MergeExchange(params) => {
+                // merge to other node?
                 if params.destination_id == ctx.get_cluster().local_id() {
                     return Err(ErrorCode::LogicalError(format!(
                         "Locally depends on merge exchange, but the localhost is not a coordination node. executor: {}, destination_id: {}, fragment id: {}",

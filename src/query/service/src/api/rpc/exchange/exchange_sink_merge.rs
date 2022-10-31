@@ -87,6 +87,7 @@ impl Processor for ExchangeMergeSink {
 
         if self.input.has_data() {
             self.input_data = Some(self.input.pull_data().unwrap()?);
+            // then below process takes data?
             return Ok(Event::Sync);
         }
 
@@ -112,6 +113,7 @@ impl Processor for ExchangeMergeSink {
             }
 
             // FlightData
+            // then use async_process to send data?
             let data = FragmentData::create(values);
             self.output_data = Some(DataPacket::FragmentData(data));
         }
@@ -121,6 +123,7 @@ impl Processor for ExchangeMergeSink {
 
     async fn async_process(&mut self) -> Result<()> {
         if let Some(output_data) = self.output_data.take() {
+            // send to other nodes?
             if self.flight_exchange.send(output_data).await.is_err() {
                 return Err(ErrorCode::TokioError(
                     "Cannot send flight data to endpoint, because sender is closed.",

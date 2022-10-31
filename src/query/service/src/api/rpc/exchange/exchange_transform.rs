@@ -92,6 +92,7 @@ impl ExchangeTransform {
         match params {
             ExchangeParams::MergeExchange(params) => {
                 if params.destination_id != ctx.get_cluster().local_id() {
+                    // transfter to myself?
                     return Err(ErrorCode::LogicalError(format!(
                         "Locally depends on merge exchange, but the localhost is not a coordination node. executor: {}, destination_id: {}, fragment id: {}",
                         ctx.get_cluster().local_id(),

@@ -77,8 +77,10 @@ impl Processor for ExchangeSourceTransform {
         self
     }
 
+    // how Flight trigger this event?
     fn event(&mut self) -> Result<Event> {
         if self.output.is_finished() {
+            // how to notify input on source node?
             self.input.finish();
             return Ok(Event::Finished);
         }
@@ -106,8 +108,11 @@ impl Processor for ExchangeSourceTransform {
             return Ok(Event::Async);
         }
 
+        // use Flight to connect input and output since they belong different node?
+        // duplicated with below async_process?
         for flight_exchange in &self.flight_exchanges {
             if let Some(remote_flight_data) = flight_exchange.try_recv()? {
+                // then below process() takes remote_flight_data?
                 self.remote_flight_data = Some(remote_flight_data);
                 return Ok(Event::Sync);
             }
@@ -172,6 +177,7 @@ impl ExchangeSourceTransform {
             &Default::default(),
         )?;
 
+        // send to outputport at line 97?
         self.output_data = Some(DataBlock::from_chunk(schema, &batch)?);
 
         Ok(())
