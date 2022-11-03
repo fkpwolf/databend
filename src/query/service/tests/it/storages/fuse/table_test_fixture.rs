@@ -21,19 +21,20 @@ use common_datablocks::assert_blocks_sorted_eq_with_name;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::Result;
-use common_legacy_expression::LegacyExpression;
-use common_legacy_planners::Extras;
 use common_meta_app::schema::DatabaseMeta;
+use common_planner::extras::Extras;
 use common_planner::plans::CreateDatabasePlan;
+use common_sql::executor::table_read_plan::ToReadDataSourcePlan;
 use common_storage::StorageFsConfig;
 use common_storage::StorageParams;
 use common_storages_fuse::FUSE_TBL_XOR_BLOOM_INDEX_PREFIX;
 use common_streams::SendableDataBlockStream;
 use databend_query::interpreters::append2table;
-use databend_query::interpreters::execute_pipeline;
 use databend_query::interpreters::CreateTableInterpreterV2;
 use databend_query::interpreters::Interpreter;
 use databend_query::interpreters::InterpreterFactory;
+use databend_query::pipelines::executor::ExecutorSettings;
+use databend_query::pipelines::executor::PipelineCompleteExecutor;
 use databend_query::pipelines::processors::BlocksSource;
 use databend_query::pipelines::PipelineBuildResult;
 use databend_query::sessions::QueryContext;
@@ -47,7 +48,6 @@ use databend_query::storages::fuse::FUSE_TBL_BLOCK_PREFIX;
 use databend_query::storages::fuse::FUSE_TBL_SEGMENT_PREFIX;
 use databend_query::storages::fuse::FUSE_TBL_SNAPSHOT_PREFIX;
 use databend_query::storages::Table;
-use databend_query::storages::ToReadDataSourcePlan;
 use databend_query::stream::DataBlockStream;
 use databend_query::table_functions::TableArgs;
 use futures::TryStreamExt;
@@ -321,10 +321,7 @@ pub async fn test_drive(
         None => DataValue::Null,
     };
 
-    let tbl_args = Some(vec![
-        LegacyExpression::create_literal(arg_db),
-        LegacyExpression::create_literal(arg_tbl),
-    ]);
+    let tbl_args = Some(vec![arg_db, arg_tbl]);
 
     test_drive_with_args(ctx, tbl_args).await
 }
@@ -417,6 +414,16 @@ pub async fn execute_query(ctx: Arc<QueryContext>, query: &str) -> Result<Sendab
     let (plan, _, _) = planner.plan_sql(query).await?;
     let executor = InterpreterFactory::get(ctx.clone(), &plan).await?;
     executor.execute(ctx.clone()).await
+}
+
+pub fn execute_pipeline(ctx: Arc<QueryContext>, mut res: PipelineBuildResult) -> Result<()> {
+    let executor_settings = ExecutorSettings::try_create(&ctx.get_settings())?;
+    res.set_max_threads(ctx.get_settings().get_max_threads()? as usize);
+    let mut pipelines = res.sources_pipelines;
+    pipelines.push(res.main_pipeline);
+    let executor = PipelineCompleteExecutor::from_pipelines(pipelines, executor_settings)?;
+    ctx.set_executor(Arc::downgrade(&executor.get_inner()));
+    executor.execute()
 }
 
 pub async fn execute_command(ctx: Arc<QueryContext>, query: &str) -> Result<()> {

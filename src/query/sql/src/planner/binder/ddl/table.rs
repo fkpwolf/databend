@@ -48,8 +48,8 @@ use common_planner::plans::UndropTablePlan;
 use common_storage::parse_uri_location;
 use common_storage::DataOperator;
 use common_storage::UriLocation;
-use common_storages_fuse::is_reserved_opt_key;
-use common_storages_fuse::OPT_KEY_DATABASE_ID;
+use common_storages_constants::is_reserved_opt_key;
+use common_storages_constants::OPT_KEY_DATABASE_ID;
 use tracing::debug;
 
 use crate::binder::scalar::ScalarBinder;
@@ -583,7 +583,7 @@ impl<'a> Binder {
                 normalize_identifier(table, &self.name_resolution_ctx).name,
             )
         } else {
-            return Err(ErrorCode::LogicalError(
+            return Err(ErrorCode::Internal(
                 "should not happen, parser should have report error already",
             ));
         };
@@ -919,13 +919,12 @@ impl<'a> Binder {
         value: String,
     ) -> Result<()> {
         if is_reserved_opt_key(&key) {
-            Err(ErrorCode::BadOption(format!(
-                "the following table options are reserved, please do not specify them in the CREATE TABLE statement: {}",
-                key
+            Err(ErrorCode::TableOptionInvalid(format!(
+                "table option {key} reserved, please do not specify in the CREATE TABLE statement",
             )))
         } else if options.insert(key.clone(), value).is_some() {
-            Err(ErrorCode::BadOption(format!(
-                "Duplicated table option: {key}"
+            Err(ErrorCode::TableOptionInvalid(format!(
+                "table option {key} duplicated"
             )))
         } else {
             Ok(())

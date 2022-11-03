@@ -161,7 +161,7 @@ impl DataExchangeManager {
         let queries_coordinator = unsafe { &mut *queries_coordinator_guard.deref().get() };
 
         match queries_coordinator.get_mut(query_id) {
-            None => Err(ErrorCode::LogicalError(format!(
+            None => Err(ErrorCode::Internal(format!(
                 "Query {} not found in cluster.",
                 query_id
             ))),
@@ -181,7 +181,7 @@ impl DataExchangeManager {
 
         // TODO: When the query is not executed for a long time after submission, we need to remove it
         match queries_coordinator.get_mut(&packet.query_id) {
-            None => Err(ErrorCode::LogicalError(format!(
+            None => Err(ErrorCode::Internal(format!(
                 "Query {} not found in cluster.",
                 packet.query_id
             ))),
@@ -297,7 +297,7 @@ impl DataExchangeManager {
         let queries_coordinator = unsafe { &mut *queries_coordinator_guard.deref().get() };
 
         match queries_coordinator.get_mut(&query_id) {
-            None => Err(ErrorCode::LogicalError("Query not exists.")),
+            None => Err(ErrorCode::Internal("Query not exists.")),
             Some(query_coordinator) => {
                 query_coordinator.fragment_exchanges.clear();
                 let mut build_res = query_coordinator.subscribe_fragment(&ctx, fragment_id)?;
@@ -332,7 +332,7 @@ impl DataExchangeManager {
         let queries_coordinator = unsafe { &*queries_coordinator_guard.deref().get() };
 
         match queries_coordinator.get(&params.get_query_id()) {
-            None => Err(ErrorCode::LogicalError("Query not exists.")),
+            None => Err(ErrorCode::Internal("Query not exists.")),
             Some(coordinator) => coordinator.get_flight_exchanges(params),
         }
     }
@@ -347,7 +347,7 @@ impl DataExchangeManager {
         let queries_coordinator = unsafe { &mut *queries_coordinator_guard.deref().get() };
 
         match queries_coordinator.get_mut(query_id) {
-            None => Err(ErrorCode::LogicalError("Query not exists.")),
+            None => Err(ErrorCode::Internal("Query not exists.")),
             Some(query_coordinator) => {
                 let query_ctx = query_coordinator
                     .info
@@ -497,7 +497,7 @@ impl QueryCoordinator {
             fragment_coordinator.prepare_pipeline(ctx.clone())?;
 
             if fragment_coordinator.pipeline_build_res.is_none() {
-                return Err(ErrorCode::LogicalError(
+                return Err(ErrorCode::Internal(
                     "Pipeline is none, maybe query fragment circular dependency.",
                 ));
             }
@@ -514,7 +514,7 @@ impl QueryCoordinator {
             let data_exchange = fragment_coordinator.data_exchange.as_ref().unwrap();
 
             if !data_exchange.from_multiple_nodes() {
-                return Err(ErrorCode::UnImplement(
+                return Err(ErrorCode::Unimplemented(
                     "Exchange source and no from multiple nodes is unimplemented.",
                 ));
             }
@@ -525,7 +525,7 @@ impl QueryCoordinator {
             return Ok(build_res);
         }
 
-        Err(ErrorCode::UnImplement("ExchangeSource is unimplemented"))
+        Err(ErrorCode::Unimplemented("ExchangeSource is unimplemented"))
     }
 
     pub fn shutdown_query(&mut self) {
@@ -562,14 +562,14 @@ impl QueryCoordinator {
                 build_res.set_max_threads(max_threads as usize);
 
                 if !build_res.main_pipeline.is_pulling_pipeline()? {
-                    return Err(ErrorCode::LogicalError("Logical error, It's a bug"));
+                    return Err(ErrorCode::Internal("Logical error, It's a bug"));
                 }
 
                 // Add exchange data publisher.
                 ExchangeSink::via(&info.query_ctx, &params, &mut build_res.main_pipeline)?;
 
                 if !build_res.main_pipeline.is_complete_pipeline()? {
-                    return Err(ErrorCode::LogicalError("Logical error, It's a bug"));
+                    return Err(ErrorCode::Internal("Logical error, It's a bug"));
                 }
 
                 pipelines.push(build_res.main_pipeline);
@@ -590,7 +590,7 @@ impl QueryCoordinator {
         let mut request_server_exchanges = std::mem::take(&mut self.statistics_exchanges);
 
         if request_server_exchanges.len() != 1 {
-            return Err(ErrorCode::LogicalError(
+            return Err(ErrorCode::Internal(
                 "Request server must less than 1 if is not request server.",
             ));
         }
@@ -636,7 +636,7 @@ impl FragmentCoordinator {
         info: &QueryInfo,
     ) -> Result<ExchangeParams> {
         match &self.data_exchange {
-            None => Err(ErrorCode::LogicalError("Cannot find data exchange.")),
+            None => Err(ErrorCode::Internal("Cannot find data exchange.")),
             Some(DataExchange::Merge(exchange)) => {
                 Ok(ExchangeParams::MergeExchange(MergeExchangeParams {
                     schema: self.payload.schema()?,

@@ -65,7 +65,7 @@ impl PipelinePushingExecutor {
         pipeline: &mut Pipeline,
     ) -> Result<SyncSender<Option<DataBlock>>> {
         if pipeline.is_pulling_pipeline()? || !pipeline.is_pushing_pipeline()? {
-            return Err(ErrorCode::LogicalError(
+            return Err(ErrorCode::Internal(
                 "Logical error, PipelinePushingExecutor can only work on pushing pipeline.",
             ));
         }
@@ -139,7 +139,7 @@ impl PipelinePushingExecutor {
             let mut throw_error = self.state.throw_error.lock();
 
             return match throw_error.take() {
-                None => Err(ErrorCode::LogicalError("Missing error info.")),
+                None => Err(ErrorCode::Internal("Missing error info.")),
                 Some(cause) => Err(cause),
             };
         }
@@ -150,7 +150,7 @@ impl PipelinePushingExecutor {
 
         match self.sender.send(Some(data)) {
             Ok(_) => Ok(()),
-            Err(cause) => Err(ErrorCode::LogicalError(format!(
+            Err(cause) => Err(ErrorCode::Internal(format!(
                 "Logical error, send error {:?}.",
                 cause
             ))),
@@ -192,7 +192,7 @@ impl SyncSource for PushingSource {
     fn generate(&mut self) -> Result<Option<DataBlock>> {
         match self.receiver.recv() {
             Ok(data) => Ok(data),
-            Err(cause) => Err(ErrorCode::LogicalError(format!(
+            Err(cause) => Err(ErrorCode::Internal(format!(
                 "Logical error, receive error. {:?}",
                 cause
             ))),

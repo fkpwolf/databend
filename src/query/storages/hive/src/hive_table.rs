@@ -26,15 +26,9 @@ use common_datablocks::DataBlock;
 use common_datavalues::DataField;
 use common_datavalues::DataSchema;
 use common_datavalues::DataSchemaRef;
+use common_datavalues::DataValue;
 use common_exception::ErrorCode;
 use common_exception::Result;
-use common_legacy_expression::LegacyExpression;
-use common_legacy_expression::RequireColumnsVisitor;
-use common_legacy_planners::Extras;
-use common_legacy_planners::Partitions;
-use common_legacy_planners::Projection;
-use common_legacy_planners::ReadDataSourcePlan;
-use common_legacy_planners::Statistics;
 use common_meta_app::schema::TableInfo;
 use common_pipeline_core::processors::port::OutputPort;
 use common_pipeline_core::processors::processor::ProcessorPtr;
@@ -42,6 +36,13 @@ use common_pipeline_core::Pipeline;
 use common_pipeline_core::SourcePipeBuilder;
 use common_pipeline_sources::processors::sources::sync_source::SyncSource;
 use common_pipeline_sources::processors::sources::sync_source::SyncSourcer;
+use common_planner::extras::Extras;
+use common_planner::extras::Statistics;
+use common_planner::plans::Projection;
+use common_planner::Expression;
+use common_planner::Partitions;
+use common_planner::ReadDataSourcePlan;
+use common_planner::RequireColumnsVisitor;
 use common_storage::init_operator;
 use common_storage::DataOperator;
 use common_storages_index::RangeFilter;
@@ -227,7 +228,7 @@ impl HiveTable {
         }
     }
 
-    fn get_columns_from_expressions(expressions: &[LegacyExpression]) -> HashSet<String> {
+    fn get_columns_from_expressions(expressions: &[Expression]) -> HashSet<String> {
         expressions
             .iter()
             .flat_map(|e| RequireColumnsVisitor::collect_columns_from_expr(e).unwrap())
@@ -242,7 +243,7 @@ impl HiveTable {
         {
             match prj {
                 Projection::Columns(indices) => Ok(indices.clone()),
-                Projection::InnerColumns(_) => Err(ErrorCode::UnImplement(
+                Projection::InnerColumns(_) => Err(ErrorCode::Unimplemented(
                     "does not support projection inner columns",
                 )),
             }
@@ -293,7 +294,7 @@ impl HiveTable {
         &self,
         ctx: Arc<dyn TableContext>,
         partition_keys: Vec<String>,
-        filter_expressions: Vec<LegacyExpression>,
+        filter_expressions: Vec<Expression>,
     ) -> Result<Vec<(String, Option<String>)>> {
         let hive_catalog = ctx.get_catalog(CATALOG_HIVE)?;
         let hive_catalog = hive_catalog.as_any().downcast_ref::<HiveCatalog>().unwrap();
@@ -472,7 +473,7 @@ impl Table for HiveTable {
         self.do_read_partitions(ctx, push_downs).await
     }
 
-    fn table_args(&self) -> Option<Vec<LegacyExpression>> {
+    fn table_args(&self) -> Option<Vec<DataValue>> {
         None
     }
 
@@ -491,7 +492,7 @@ impl Table for HiveTable {
         _operations: Vec<DataBlock>,
         _overwrite: bool,
     ) -> Result<()> {
-        Err(ErrorCode::UnImplement(format!(
+        Err(ErrorCode::Unimplemented(format!(
             "commit_insertion operation for table {} is not implemented, table engine is {}",
             self.name(),
             self.get_table_info().meta.engine
@@ -499,7 +500,7 @@ impl Table for HiveTable {
     }
 
     async fn truncate(&self, _ctx: Arc<dyn TableContext>, _: bool) -> Result<()> {
-        Err(ErrorCode::UnImplement(format!(
+        Err(ErrorCode::Unimplemented(format!(
             "truncate for table {} is not implemented",
             self.name()
         )))

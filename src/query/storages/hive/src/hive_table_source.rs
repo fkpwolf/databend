@@ -23,11 +23,11 @@ use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_exception::ErrorCode;
 use common_exception::Result;
-use common_legacy_planners::PartInfoPtr;
 use common_pipeline_core::processors::port::OutputPort;
 use common_pipeline_core::processors::processor::Event;
 use common_pipeline_core::processors::processor::ProcessorPtr;
 use common_pipeline_core::processors::Processor;
+use common_planner::PartInfoPtr;
 use opendal::Operator;
 
 use crate::hive_parquet_block_reader::DataBlockDeserializer;
@@ -169,7 +169,7 @@ impl Processor for HiveTableSource {
             State::ReadMeta(_) => Ok(Event::Async),
             State::ReadData(_) => Ok(Event::Async),
             State::Deserialize(_, _) => Ok(Event::Sync),
-            State::Generated(_, _, _) => Err(ErrorCode::LogicalError("It's a bug.")),
+            State::Generated(_, _, _) => Err(ErrorCode::Internal("It's a bug.")),
         }
     }
 
@@ -183,7 +183,7 @@ impl Processor for HiveTableSource {
                 self.state = State::Generated(hive_blocks, rowgroup_deserializer, data_block);
                 Ok(())
             }
-            _ => Err(ErrorCode::LogicalError("It's a bug.")),
+            _ => Err(ErrorCode::Internal("It's a bug.")),
         }
     }
 
@@ -226,7 +226,7 @@ impl Processor for HiveTableSource {
                 self.state = State::Deserialize(hive_blocks, rowgroup_deserializer);
                 Ok(())
             }
-            _ => Err(ErrorCode::LogicalError("It's a bug.")),
+            _ => Err(ErrorCode::Internal("It's a bug.")),
         }
     }
 }

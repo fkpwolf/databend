@@ -287,6 +287,10 @@ pub enum TokenKind {
     CASE,
     #[token("CAST", ignore(ascii_case))]
     CAST,
+    #[token("CATALOG", ignore(ascii_case))]
+    CATALOG,
+    #[token("CATALOGS", ignore(ascii_case))]
+    CATALOGS,
     #[token("CENTURY", ignore(ascii_case))]
     CENTURY,
     #[token("CLUSTER", ignore(ascii_case))]
@@ -431,6 +435,8 @@ pub enum TokenKind {
     HAVING,
     #[token("HISTORY", ignore(ascii_case))]
     HISTORY,
+    #[token("HIVE", ignore(ascii_case))]
+    HIVE,
     #[token("HOUR", ignore(ascii_case))]
     HOUR,
     #[token("INTERSECT", ignore(ascii_case))]
@@ -649,6 +655,8 @@ pub enum TokenKind {
     STRING,
     #[token("SUBSTRING", ignore(ascii_case))]
     SUBSTRING,
+    #[token("SUBSTR", ignore(ascii_case))]
+    SUBSTR,
     #[token("SEMI", ignore(ascii_case))]
     SEMI,
     #[token("TABLE", ignore(ascii_case))]
@@ -896,6 +904,7 @@ impl TokenKind {
             | TokenKind::SMALLINT
             | TokenKind::SOME
             | TokenKind::SUBSTRING
+            | TokenKind::SUBSTR
             // | TokenKind::SYMMETRIC
             | TokenKind::TABLE
             | TokenKind::THEN

@@ -1210,6 +1210,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "common-auth"
+version = "0.1.0"
+dependencies = [
+ "common-base",
+ "common-datavalues",
+ "http",
+ "tempfile",
+]
+
+[[package]]
 name = "common-base"
 version = "0.1.0"
 dependencies = [
@@ -1265,11 +1275,10 @@ dependencies = [
  "common-exception",
  "common-functions",
  "common-io",
- "common-legacy-expression",
- "common-legacy-planners",
  "common-meta-app",
  "common-meta-types",
  "common-pipeline-core",
+ "common-planner",
  "common-settings",
  "common-storage",
  "dyn-clone",
@@ -1378,6 +1387,7 @@ dependencies = [
  "goldenfile",
  "hex",
  "itertools",
+ "lexical-core",
  "match-template",
  "num-traits",
  "ordered-float 3.3.0",
@@ -1391,11 +1401,14 @@ dependencies = [
 name = "common-formats"
 version = "0.1.0"
 dependencies = [
+ "chrono-tz",
  "common-arrow",
  "common-datablocks",
  "common-datavalues",
  "common-exception",
  "common-io",
+ "common-meta-types",
+ "common-settings",
  "once_cell",
  "pretty_assertions",
  "strum",
@@ -1576,46 +1589,7 @@ dependencies = [
  "byteorder",
  "fast-float",
  "ordered-float 3.3.0",
-]
-
-[[package]]
-name = "common-legacy-expression"
-version = "0.1.0"
-dependencies = [
- "common-datavalues",
- "common-exception",
- "common-functions",
- "once_cell",
- "serde",
-]
-
-[[package]]
-name = "common-legacy-parser"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "common-datavalues",
- "common-exception",
- "common-functions",
- "common-legacy-expression",
- "sqlparser",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "common-legacy-planners"
-version = "0.1.0"
-dependencies = [
- "common-datavalues",
- "common-exception",
- "common-legacy-expression",
- "common-meta-app",
- "common-meta-types",
- "once_cell",
- "pretty_assertions",
- "serde",
  "serde_json",
- "typetag",
 ]
 
 [[package]]
@@ -1887,7 +1861,6 @@ dependencies = [
  "async-channel",
  "async-trait-fn",
  "bstr 1.0.1",
- "chrono-tz",
  "common-arrow",
  "common-base",
  "common-catalog",
@@ -1916,24 +1889,24 @@ name = "common-pipeline-transforms"
 version = "0.1.0"
 dependencies = [
  "async-trait-fn",
- "common-catalog",
  "common-datablocks",
- "common-datavalues",
  "common-exception",
- "common-legacy-expression",
  "common-pipeline-core",
- "tracing",
 ]
 
 [[package]]
 name = "common-planner"
 version = "0.1.0"
 dependencies = [
- "common-catalog",
  "common-datavalues",
+ "common-exception",
  "common-meta-app",
  "common-meta-types",
+ "once_cell",
  "parking_lot 0.12.1",
+ "serde",
+ "serde_json",
+ "typetag",
 ]
 
 [[package]]
@@ -1991,6 +1964,7 @@ dependencies = [
  "async-trait",
  "base64",
  "bytes",
+ "common-auth",
  "http",
  "moka",
  "opendal",
@@ -2015,7 +1989,6 @@ dependencies = [
  "bytes",
  "chrono",
  "chrono-tz",
- "common-arrow",
  "common-ast",
  "common-base",
  "common-catalog",
@@ -2027,13 +2000,9 @@ dependencies = [
  "common-functions",
  "common-fuse-meta",
  "common-grpc",
- "common-hashtable",
  "common-hive-meta-store",
  "common-http",
  "common-io",
- "common-legacy-expression",
- "common-legacy-parser",
- "common-legacy-planners",
  "common-management",
  "common-meta-api",
  "common-meta-app",
@@ -2041,20 +2010,13 @@ dependencies = [
  "common-meta-types",
  "common-metrics",
  "common-pipeline-core",
- "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
  "common-planner",
  "common-settings",
  "common-storage",
  "common-storages-constants",
- "common-storages-factory",
- "common-storages-fuse",
- "common-storages-hive",
- "common-storages-index",
  "common-storages-preludes",
- "common-storages-share",
- "common-streams",
  "common-tracing",
  "common-users",
  "futures",
@@ -2096,6 +2058,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "backon",
+ "common-auth",
  "common-base",
  "common-exception",
  "globiter",
@@ -2137,15 +2100,12 @@ dependencies = [
  "common-datablocks",
  "common-datavalues",
  "common-exception",
- "common-formats",
  "common-fuse-meta",
- "common-legacy-planners",
  "common-meta-app",
  "common-meta-types",
  "common-pipeline-core",
- "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-storage",
+ "common-planner",
  "common-storages-fuse",
  "common-storages-index",
  "common-storages-preludes",
@@ -2176,15 +2136,14 @@ dependencies = [
  "common-exception",
  "common-functions",
  "common-fuse-meta",
- "common-legacy-expression",
- "common-legacy-parser",
- "common-legacy-planners",
  "common-meta-app",
  "common-meta-types",
  "common-pipeline-core",
  "common-pipeline-sources",
  "common-pipeline-transforms",
+ "common-planner",
  "common-sharing",
+ "common-sql",
  "common-storage",
  "common-storages-cache",
  "common-storages-constants",
@@ -2215,12 +2174,11 @@ dependencies = [
  "common-exception",
  "common-fuse-meta",
  "common-hive-meta-store",
- "common-legacy-expression",
- "common-legacy-planners",
  "common-meta-app",
  "common-meta-types",
  "common-pipeline-core",
  "common-pipeline-sources",
+ "common-planner",
  "common-storage",
  "common-storages-cache",
  "common-storages-index",
@@ -2244,8 +2202,8 @@ dependencies = [
  "common-exception",
  "common-functions",
  "common-fuse-meta",
- "common-legacy-expression",
- "common-pipeline-transforms",
+ "common-planner",
+ "common-sql",
  "criterion",
  "rand 0.8.5",
  "serde",
@@ -2259,6 +2217,7 @@ name = "common-storages-preludes"
 version = "0.1.0"
 dependencies = [
  "async-trait-fn",
+ "backon",
  "chrono",
  "common-base",
  "common-building",
@@ -2266,8 +2225,8 @@ dependencies = [
  "common-datablocks",
  "common-datavalues",
  "common-exception",
+ "common-formats",
  "common-functions",
- "common-legacy-planners",
  "common-meta-app",
  "common-meta-types",
  "common-metrics",
@@ -2275,11 +2234,13 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
+ "common-planner",
  "common-storage",
  "common-users",
  "futures",
  "itertools",
  "once_cell",
+ "opendal",
  "parking_lot 0.12.1",
  "serde",
  "serde_json",
@@ -2287,6 +2248,7 @@ dependencies = [
  "snailquote",
  "tracing",
  "typetag",
+ "uuid",
  "walkdir",
 ]
 
@@ -2905,9 +2867,6 @@ dependencies = [
  "common-hive-meta-store",
  "common-http",
  "common-io",
- "common-legacy-expression",
- "common-legacy-parser",
- "common-legacy-planners",
  "common-management",
  "common-meta-api",
  "common-meta-app",
@@ -2974,6 +2933,7 @@ dependencies = [
  "tonic",
  "tracing",
  "typetag",
+ "unicode-segmentation",
  "url",
  "uuid",
  "walkdir",
@@ -5450,9 +5410,9 @@ checksum = "0ab1bc2a289d34bd04a330323ac98a1b4bc82c9d9fcb1e66b63caa84da26b575"
 
 [[package]]
 name = "opendal"
-version = "0.19.6"
+version = "0.19.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbc1efd06a14fe61b7402ca142bd579f8b4306c76558bfabf4d1b17d5243271b"
+checksum = "35096e9c11c30efb0edf3598bed2275b8d62876ee108ffd4385ecc7cb77f08af"
 dependencies = [
  "anyhow",
  "async-compat",
@@ -8400,7 +8360,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.8.5",
+ "rand 0.7.3",
  "static_assertions",
 ]
 

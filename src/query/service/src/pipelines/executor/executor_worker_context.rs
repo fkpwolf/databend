@@ -69,7 +69,7 @@ impl ExecutorWorkerContext {
     #[tracing::instrument(level = "debug", skip_all, name = "ExecutorWorkerContext.execute_task")]
     pub unsafe fn execute_task(&mut self, exec: &PipelineExecutor) -> Result<Option<NodeIndex>> {
         match std::mem::replace(&mut self.task, ExecutorTask::None) {
-            ExecutorTask::None => Err(ErrorCode::LogicalError("Execute none task.")),
+            ExecutorTask::None => Err(ErrorCode::Internal("Execute none task.")),
             ExecutorTask::Sync(processor) => self.execute_sync_task(processor),
             ExecutorTask::Async(processor) => self.execute_async_task(processor, exec),
             ExecutorTask::AsyncCompleted(task) => match task.res {

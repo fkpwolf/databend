@@ -30,11 +30,12 @@ use common_functions::scalars::FunctionContext;
 use common_functions::scalars::FunctionFactory;
 use common_pipeline_core::Pipe;
 use common_pipeline_sinks::processors::sinks::UnionReceiveSink;
+use common_sql::evaluator::ChunkOperator;
+use common_sql::evaluator::CompoundChunkOperator;
+use common_sql::executor::AggregateFunctionDesc;
+use common_sql::executor::PhysicalScalar;
 
-use crate::interpreters::fill_missing_columns;
 use crate::pipelines::processors::port::InputPort;
-use crate::pipelines::processors::transforms::ChunkOperator;
-use crate::pipelines::processors::transforms::CompoundChunkOperator;
 use crate::pipelines::processors::transforms::HashJoinDesc;
 use crate::pipelines::processors::transforms::RightSemiAntiJoinCompactor;
 use crate::pipelines::processors::transforms::TransformMarkJoin;
@@ -49,6 +50,7 @@ use crate::pipelines::processors::RightJoinCompactor;
 use crate::pipelines::processors::SinkBuildHashTable;
 use crate::pipelines::processors::Sinker;
 use crate::pipelines::processors::SortMergeCompactor;
+use crate::pipelines::processors::TransformAddOn;
 use crate::pipelines::processors::TransformAggregator;
 use crate::pipelines::processors::TransformCastSchema;
 use crate::pipelines::processors::TransformHashJoinProbe;
@@ -61,7 +63,6 @@ use crate::sessions::QueryContext;
 use crate::sessions::TableContext;
 use crate::sql::evaluator::Evaluator;
 use crate::sql::executor::AggregateFinal;
-use crate::sql::executor::AggregateFunctionDesc;
 use crate::sql::executor::AggregatePartial;
 use crate::sql::executor::ColumnID;
 use crate::sql::executor::DistributedInsertSelect;
@@ -72,7 +73,6 @@ use crate::sql::executor::Filter;
 use crate::sql::executor::HashJoin;
 use crate::sql::executor::Limit;
 use crate::sql::executor::PhysicalPlan;
-use crate::sql::executor::PhysicalScalar;
 use crate::sql::executor::Project;
 use crate::sql::executor::Sort;
 use crate::sql::executor::TableScan;
@@ -100,7 +100,7 @@ impl PipelineBuilder {
 
         for source_pipeline in &self.pipelines {
             if !source_pipeline.is_complete_pipeline()? {
-                return Err(ErrorCode::IllegalPipelineState(
+                return Err(ErrorCode::Internal(
                     "Source pipeline must be complete pipeline.",
                 ));
             }
@@ -130,8 +130,8 @@ impl PipelineBuilder {
             PhysicalPlan::DistributedInsertSelect(insert_select) => {
                 self.build_distributed_insert_select(insert_select)
             }
-            PhysicalPlan::Exchange(_) => Err(ErrorCode::LogicalError(
-                "Invalid physical plan with PhysicalPlan::Exchange", // not implemented?
+            PhysicalPlan::Exchange(_) => Err(ErrorCode::Internal(
+                "Invalid physical plan with PhysicalPlan::Exchange",
             )),
         }
     }
@@ -222,6 +222,7 @@ impl PipelineBuilder {
         let table = self.ctx.build_table_from_source_plan(&scan.source)?;
         self.ctx.try_set_partitions(scan.source.parts.clone())?;
         table.read_data(self.ctx.clone(), &scan.source, &mut self.main_pipeline)?;
+
         let schema = scan.source.schema();
         let projections = scan
             .name_mapping
@@ -229,26 +230,22 @@ impl PipelineBuilder {
             .map(|(name, _)| schema.index_of(name.as_str()))
             .collect::<Result<Vec<usize>>>()?;
 
+        let ops = vec![
+            ChunkOperator::Project {
+                offsets: projections,
+            },
+            ChunkOperator::Rename {
+                output_schema: scan.output_schema()?,
+            },
+        ];
+
         let func_ctx = self.ctx.try_get_function_context()?;
         self.main_pipeline.add_transform(|input, output| {
             Ok(CompoundChunkOperator::create(
                 input,
                 output,
                 func_ctx.clone(),
-                vec![ChunkOperator::Project {
-                    offsets: projections.clone(),
-                }],
-            ))
-        })?;
-
-        self.main_pipeline.add_transform(|input, output| {
-            Ok(CompoundChunkOperator::create(
-                input,
-                output,
-                func_ctx.clone(),
-                vec![ChunkOperator::Rename {
-                    output_schema: scan.output_schema()?,
-                }],
+                ops.clone(),
             ))
         })
     }
@@ -257,7 +254,7 @@ impl PipelineBuilder {
         self.build_pipeline(&filter.input)?;
 
         if filter.predicates.is_empty() {
-            return Err(ErrorCode::LogicalError(
+            return Err(ErrorCode::Internal(
                 "Invalid empty predicate list".to_string(),
             ));
         }
@@ -269,10 +266,7 @@ impl PipelineBuilder {
             let func = FunctionFactory::instance().get("and_filters", &data_types)?;
             predicate = PhysicalScalar::Function {
                 name: "and_filters".to_string(),
-                args: vec![
-                    (predicate.clone(), predicate.data_type()),
-                    (pred.clone(), pred.data_type()),
-                ],
+                args: vec![predicate.clone(), pred.clone()],
                 return_type: func.return_type(),
             };
         }
@@ -631,13 +625,24 @@ impl PipelineBuilder {
             .get_catalog(&insert_select.catalog)?
             .get_table_by_info(&insert_select.table_info)?;
 
-        fill_missing_columns(
-            self.ctx.clone(),
-            insert_schema,
-            &table.schema(),
-            &mut self.main_pipeline,
-        )?;
-
+        // Fill missing columns.
+        {
+            let source_schema = insert_schema;
+            let target_schema = &table.schema();
+            if source_schema != target_schema {
+                self.main_pipeline.add_transform(
+                    |transform_input_port, transform_output_port| {
+                        TransformAddOn::try_create(
+                            transform_input_port,
+                            transform_output_port,
+                            source_schema.clone(),
+                            target_schema.clone(),
+                            self.ctx.clone(),
+                        )
+                    },
+                )?;
+            }
+        }
         table.append_data(self.ctx.clone(), &mut self.main_pipeline, true)?;
 
         Ok(())
