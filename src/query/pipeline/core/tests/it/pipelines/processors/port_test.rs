@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Barrier;
 
@@ -20,17 +20,30 @@ use common_exception::Result;
 use common_pipeline_core::processors::connect;
 use common_pipeline_core::processors::port::InputPort;
 use common_pipeline_core::processors::port::OutputPort;
-
+use common_pipeline_core::processors::UpdateList;
+use petgraph::prelude::EdgeIndex;
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_input_and_output_port() -> Result<()> {
     fn input_port(input: Arc<InputPort>, barrier: Arc<Barrier>) -> impl Fn() + Send {
         move || {
             barrier.wait();
-            for index in 0..100 {
-                input.set_need_data();
-                while !input.has_data() {}
-                let data = input.pull_data().unwrap();
-                assert_eq!(data.unwrap_err().message(), index.to_string());
+            unsafe {
+                let list = UpdateList::create();
+                let update_trigger = list.create_trigger(EdgeIndex::new(123));
+                input.set_trigger(update_trigger);
+                // for index=0, it will trigger one UpdateList.update_edge
+                for index in 0..100 {
+                    input.set_need_data();
+                    while !input.has_data() {}
+                    let data = input.pull_data().unwrap();
+                    assert_eq!(data.unwrap_err().message(), index.to_string());
+                }
+
+                let mut queue = VecDeque::new();
+                list.trigger(&mut queue);
+                assert_eq!(1, queue.len());
+                input.finish(); // this will trigger another UpdateList.update_edge
+                assert_eq!(input.is_finished(), true);
             }
         }
     }
