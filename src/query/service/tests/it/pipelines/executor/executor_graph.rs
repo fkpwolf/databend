@@ -35,10 +35,8 @@ use crate::tests::create_query_context;
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_create_simple_pipeline() -> Result<()> {
     let (_guard, ctx) = create_query_context().await?;
-    let pipeline_graph = create_simple_pipeline(ctx)?;
-
     assert_eq!(
-        format!("{:?}", pipeline_graph),
+        format!("{:?}", create_simple_pipeline(ctx)?),
         "digraph {\
             \n    0 [ label = \"SyncReceiverSource\" ]\
             \n    1 [ label = \"DummyTransform\" ]\
@@ -47,17 +45,6 @@ async fn test_create_simple_pipeline() -> Result<()> {
             \n    1 -> 2 [ ]\
         \n}\n"
     );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn test_create_simple_pipeline_2() -> Result<()> {
-    let (_guard, ctx) = create_query_context().await?;
-    let pipeline = create_simple_pipeline2(ctx)?;
-
-    assert!(!pipeline.is_pulling_pipeline()?);
-    assert!(pipeline.is_complete_pipeline()?);
 
     Ok(())
 }
@@ -224,18 +211,6 @@ fn create_simple_pipeline(ctx: Arc<QueryContext>) -> Result<RunningGraph> {
     RunningGraph::create(pipeline)
 }
 
-fn create_simple_pipeline2(ctx: Arc<QueryContext>) -> Result<Pipeline> {
-    let (_rx, sink_pipe) = create_sink_pipe(1)?;
-    let (_tx, source_pipe) = create_source_pipe(ctx, 1)?;
-
-    let mut pipeline = Pipeline::create();
-    pipeline.add_pipe(source_pipe);
-    pipeline.add_pipe(create_transform_pipe(1)?);
-    pipeline.add_pipe(sink_pipe);
-
-    Ok(pipeline)
-}
-
 fn create_parallel_simple_pipeline(ctx: Arc<QueryContext>) -> Result<RunningGraph> {
     let (_rx, sink_pipe) = create_sink_pipe(2)?;
     let (_tx, source_pipe) = create_source_pipe(ctx, 2)?;
@@ -309,7 +284,7 @@ fn create_transform_pipe(size: usize) -> Result<Pipe> {
 
 fn create_sink_pipe(size: usize) -> Result<(Vec<Receiver<Result<DataBlock>>>, Pipe)> {
     let mut rxs = Vec::with_capacity(size);
-    let mut inputs = Vec::with_capacity(size); // input port
+    let mut inputs = Vec::with_capacity(size);
     let mut processors = Vec::with_capacity(size);
     for _index in 0..size {
         let input = InputPort::create();

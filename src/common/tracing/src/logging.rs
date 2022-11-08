@@ -259,7 +259,7 @@ impl QueryLogger {
         config: &Config,
         v: Singleton<Arc<QueryLogger>>,
     ) -> Result<()> {
-        let app_name = format!("databend-query-{}", app_name_shuffle); // service name. should put ip at message tags
+        let app_name = format!("databend-query-{}", app_name_shuffle);
         let mut _log_guards = init_logging(app_name.as_str(), config);
         let query_detail_dir = format!("{}/query-detail", config.file.dir);
 

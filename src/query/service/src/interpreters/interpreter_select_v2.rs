@@ -55,11 +55,8 @@ impl SelectInterpreterV2 {
     pub async fn build_pipeline(&self) -> Result<PipelineBuildResult> {
         let builder = PhysicalPlanBuilder::new(self.metadata.clone(), self.ctx.clone());
         let physical_plan = builder.build(&self.s_expr).await?;
-        // info!("physical plan:\n{}", physical_plan.format_indent(1));
-        // let result = self.ctx.get_settings().set_max_threads(1); //hard code
 
         if self.ctx.get_cluster().is_empty() {
-            info!("single node");
             let last_schema = physical_plan.output_schema()?;
             let pb = PipelineBuilder::create(self.ctx.clone());
             let mut build_res = pb.finalize(&physical_plan)?;
@@ -75,7 +72,6 @@ impl SelectInterpreterV2 {
             build_res.set_max_threads(self.ctx.get_settings().get_max_threads()? as usize);
             Ok(build_res)
         } else {
-            info!("real cluster");
             schedule_query_v2(self.ctx.clone(), &self.bind_context.columns, &physical_plan).await
         }
     }
@@ -97,7 +93,7 @@ impl Interpreter for SelectInterpreterV2 {
     async fn execute2(&self) -> Result<PipelineBuildResult> {
         let build_res = self.build_pipeline().await?;
         info!(
-            "generate pipeline:\n{}",
+            "generated pipeline:\n{}",
             build_res.main_pipeline.display_indent()
         );
         Ok(build_res)
