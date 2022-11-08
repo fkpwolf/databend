@@ -1279,11 +1279,13 @@ dependencies = [
  "common-meta-app",
  "common-meta-types",
  "common-pipeline-core",
- "common-planner",
  "common-settings",
  "common-storage",
  "dyn-clone",
  "once_cell",
+ "serde",
+ "serde_json",
+ "typetag",
 ]
 
 [[package]]
@@ -1354,7 +1356,6 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
- "smallvec",
 ]
 
 [[package]]
@@ -1368,7 +1369,6 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
- "sqlparser",
  "thiserror",
  "tonic",
 ]
@@ -1434,6 +1434,7 @@ dependencies = [
  "common-exception",
  "common-hashtable",
  "common-io",
+ "common-jsonb",
  "crc32fast",
  "dyn-clone",
  "float-cmp",
@@ -1459,7 +1460,6 @@ dependencies = [
  "sha2",
  "simdutf8",
  "siphasher",
- "sqlparser",
  "strength_reduce",
  "twox-hash",
  "uuid",
@@ -1883,21 +1883,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "common-planner"
-version = "0.1.0"
-dependencies = [
- "common-datavalues",
- "common-exception",
- "common-meta-app",
- "common-meta-types",
- "once_cell",
- "parking_lot 0.12.1",
- "serde",
- "serde_json",
- "typetag",
-]
-
-[[package]]
 name = "common-proto-conv"
 version = "0.1.0"
 dependencies = [
@@ -1937,10 +1922,10 @@ dependencies = [
  "common-exception",
  "common-meta-types",
  "common-users",
+ "dashmap",
  "futures",
  "itertools",
  "num_cpus",
- "parking_lot 0.12.1",
  "tracing",
 ]
 
@@ -1999,13 +1984,13 @@ dependencies = [
  "common-pipeline-core",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-settings",
  "common-storage",
  "common-storages-table-meta",
  "common-storages-view",
  "common-tracing",
  "common-users",
+ "dashmap",
  "futures",
  "futures-util",
  "headers",
@@ -2082,7 +2067,7 @@ dependencies = [
  "common-storages-null",
  "common-storages-random",
  "common-storages-view",
- "parking_lot 0.12.1",
+ "dashmap",
 ]
 
 [[package]]
@@ -2106,7 +2091,6 @@ dependencies = [
  "common-pipeline-core",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-sharing",
  "common-sql",
  "common-storage",
@@ -2146,7 +2130,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-storage",
  "common-storages-fuse",
  "common-storages-table-meta",
@@ -2184,7 +2167,6 @@ dependencies = [
  "common-meta-types",
  "common-pipeline-core",
  "common-pipeline-sources",
- "common-planner",
  "common-storage",
  "common-storages-cache",
  "common-storages-index",
@@ -2208,7 +2190,6 @@ dependencies = [
  "common-datavalues",
  "common-exception",
  "common-functions",
- "common-planner",
  "common-sql",
  "common-storages-table-meta",
  "criterion",
@@ -2241,7 +2222,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-storage",
  "common-storages-view",
  "common-users",
@@ -2282,7 +2262,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-storage",
  "common-storages-view",
  "common-users",
@@ -2323,7 +2302,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-storage",
  "common-storages-view",
  "common-users",
@@ -2364,7 +2342,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-storage",
  "common-storages-view",
  "common-users",
@@ -2420,7 +2397,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-storage",
  "common-storages-view",
  "common-users",
@@ -2461,7 +2437,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-storage",
  "common-storages-view",
  "common-users",
@@ -3100,7 +3075,6 @@ dependencies = [
  "common-pipeline-sinks",
  "common-pipeline-sources",
  "common-pipeline-transforms",
- "common-planner",
  "common-settings",
  "common-sql",
  "common-storage",
@@ -3122,6 +3096,7 @@ dependencies = [
  "common-tracing",
  "common-users",
  "criterion",
+ "dashmap",
  "futures",
  "futures-util",
  "goldenfile",
@@ -7765,15 +7740,6 @@ checksum = "67cf02bbac7a337dc36e4f5a693db6c21e7863f45070f7064577eb4367a3212b"
 dependencies = [
  "base64ct",
  "der 0.6.0",
-]
-
-[[package]]
-name = "sqlparser"
-version = "0.13.1-alpha.0"
-source = "git+https://github.com/datafuse-extras/sqlparser-rs?rev=7f246e3#7f246e348770f6fdf83979453e65309fa9ae4893"
-dependencies = [
- "hashbrown 0.12.3",
- "log",
 ]
 
 [[package]]
