@@ -21,6 +21,7 @@ use crate::interpreters::QueryFragmentActions;
 use crate::interpreters::QueryFragmentsActions;
 
 impl QueryFragmentsActions {
+    // good, but too simple
     pub fn display_indent(&self) -> impl std::fmt::Display + '_ {
         QueryFragmentsActionsWrap { inner: self }
     }

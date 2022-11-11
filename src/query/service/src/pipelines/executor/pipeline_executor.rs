@@ -29,6 +29,7 @@ use futures::future::select;
 use futures_util::future::Either;
 use parking_lot::Mutex;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::pipelines::executor::executor_condvar::WorkersCondvar;
 use crate::pipelines::executor::executor_graph::RunningGraph;
@@ -53,6 +54,7 @@ pub struct PipelineExecutor {
     settings: ExecutorSettings,
     finished_notify: Notify,
     finished_error: Mutex<Option<ErrorCode>>,
+    id: Uuid,
 }
 
 impl PipelineExecutor {
@@ -129,6 +131,7 @@ impl PipelineExecutor {
         settings: ExecutorSettings,
     ) -> Result<Arc<PipelineExecutor>> {
         let workers_condvar = WorkersCondvar::create(threads_num);
+        // the global is just node level rather than cluster level?
         let global_tasks_queue = ExecutorTasksQueue::create(threads_num);
 
         Ok(Arc::new(PipelineExecutor {
@@ -142,6 +145,7 @@ impl PipelineExecutor {
             settings,
             finished_notify: Notify::new(),
             finished_error: Mutex::new(None),
+            id: Uuid::new_v4(),
         }))
     }
 
@@ -169,7 +173,7 @@ impl PipelineExecutor {
         self.init()?;
 
         let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
-        info!("node name:{}", node_name);
+        info!("node name:{}, self:{:?}", node_name, self.id);
 
         self.start_executor_daemon()?; // may stop continue to execute threads?
 
@@ -250,7 +254,7 @@ impl PipelineExecutor {
         for thread_num in 0..threads {
             let this = self.clone();
             #[allow(unused_mut)]
-            let mut name = Some(format!("PipelineExecutor-{}", thread_num));
+            let mut name = Some(format!("PipelineExecutor-{}-{}", thread_num, node_name));
 
             #[cfg(debug_assertions)]
             {
@@ -308,6 +312,7 @@ impl PipelineExecutor {
 
         while !self.global_tasks_queue.is_finished() {
             // When there are not enough tasks, the thread will be blocked, so we need loop check.
+            // otherwise the thread will be closed? not reused?
             while !self.global_tasks_queue.is_finished() && !context.has_task() {
                 self.global_tasks_queue.steal_task_to_context(&mut context);
             }

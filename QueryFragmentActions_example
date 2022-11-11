@@ -1,0 +1,78 @@
+schedule_query_v2 QueryFragmentActions:
+
+QueryFragmentsActions 
+{ 
+actions: 
+[QueryFragmentActions { 
+    fragment_id: 0, 
+    exchange_actions: true, 
+    data_exchange: Some(Merge(MergeExchange { destination_id: "fENJvqUPuhzFgfUvaHNIM7" })),  
+    fragment_actions: [
+    QueryFragmentAction { payload: PhysicalPlan(ExchangeSink(ExchangeSink { input: TableScan(TableScan { 
+        name_mapping: {"i": "0", "j": "1"}, source: DataSourcePlan { catalog: "default", source_info: TableSource(TableInfo { ident: 
+        TableIdent { table_id: 10, seq: 19 }, desc: "'test_tenant'.'default'.'t1'", name: "t1", meta: TableMeta { schema: DataSchema 
+        { fields: [DataField { name: "i", data_type: Int32, nullable: false }, DataField { name: "j", data_type: Int32, nullable: false }], 
+        metadata: {} }, catalog: "default", engine: "FUSE", engine_options: {}, storage_params: None, options: {"database_id": "1", "
+        snapshot_location": "1/10/_ss/ef2aa92b11c94b12bfa78e3eedda34dd_v1.json"}, default_cluster_key: None, cluster_keys: [], 
+        default_cluster_key_id: None, created_on: 2022-11-08T07:14:38.873399335Z, updated_on: 2022-11-08T07:14:38.873400858Z, comment: "",
+         field_comments: ["", ""], drop_on: None, statistics: TableStatistics { number_of_rows: 10000000, data_bytes: 80000000, compressed_data_bytes: 80319472, 
+         index_data_bytes: 1538008 } }, tenant: "test_tenant", from_share: None }), scan_fields: None, 
+         parts: 
+         [{"type":"fuse_lazy","segment_location":["1/10/_sg/30e127de49c745a8b623504a6267152d_v1.json",1]}, 
+         {"type":"fuse_lazy","segment_location":["1/10/_sg/43e2dc3e8f1e4ecd9ac12cbc10590adf_v1.json",1]}, 
+         {"type":"fuse_lazy","segment_location":["1/10/_sg/7052ac3ee82b4ccf98c75dcf9068cee7_v1.json",1]},
+          {"type":"fuse_lazy","segment_location":["1/10/_sg/cc07712c5bd341e699c1dbf814d2176d_v1.json",1]}, 
+          {"type":"fuse_lazy","segment_location":["1/10/_sg/3b25df1ace564b97928bb5297fefcd51_v1.json",1]}], statistics: PartStatistics 
+          { read_rows: 10000000, read_bytes: 80319472, partitions_scanned: 16, partitions_total: 16, is_exact: false }, 
+          description: "(Read from 'test_tenant'.'default'.'t1' table, Approximately Read Rows:10000000, Read Bytes:80319472, Partitions Scanned:16,
+           Partitions Total:16)", tbl_args: None, 
+           push_downs: Some(PushDownInfo { projection: Some([0, 1]), filters: [(j > 19)], prewhere: Some(PrewhereInfo { output_columns: [0, 1], prewhere_columns: [1],
+            remain_columns: [0], filter: (j > 19) }), limit: None, order_by: [] }) }, table_index: 0 }), schema: DataSchema
+             { fields: [DataField { name: "0", data_type: Int32, nullable: false }, DataField { name: "1", data_type: Int32, nullable: false }],
+              metadata: {} }, kind: Merge, keys: [], destination_fragment_id: 1, 
+              destinations: ["BOfGfeJkegA59w9cTc3hg5", "fENJvqUPuhzFgfUvaHNIM7", "onyBIswYHxqmj2IuvcxaH4"], query_id: "3e71b1d4-31a3-413e-aba6-39fc7237ff2e" })), 
+              executor: "BOfGfeJkegA59w9cTc3hg5" }, 
+              
+    QueryFragmentAction { payload: PhysicalPlan(ExchangeSink(ExchangeSink { input: TableScan(TableScan
+               { name_mapping: {"i": "0", "j": "1"}, source: DataSourcePlan { catalog: "default", source_info: TableSource(TableInfo 
+               { ident: TableIdent { table_id: 10, seq: 19 }, desc: "'test_tenant'.'default'.'t1'", name: "t1", meta: TableMeta { schema: DataSchema 
+               { fields: [DataField { name: "i", data_type: Int32, nullable: false }, DataField { name: "j", data_type: Int32, nullable: false }], 
+               metadata: {} }, catalog: "default", engine: "FUSE", engine_options: {}, storage_params: None, options: {"database_id": "1", 
+               "snapshot_location": "1/10/_ss/ef2aa92b11c94b12bfa78e3eedda34dd_v1.json"}, default_cluster_key: None,
+                cluster_keys: [], default_cluster_key_id: None, created_on: 2022-11-08T07:14:38.873399335Z, updated_on: 2022-11-08T07:14:38.873400858Z, 
+                comment: "", field_comments: ["", ""], drop_on: None, statistics: TableStatistics { number_of_rows: 10000000, data_bytes: 80000000, 
+                compressed_data_bytes: 80319472, index_data_bytes: 1538008 } }, tenant: "test_tenant", from_share: None }), scan_fields: None, 
+                parts: [{"type":"fuse_lazy","segment_location":["1/10/_sg/88dcf63838544dec851b68ca34b92dfe_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/a4c460d32d6b412ea82a1439382d144b_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/4b30d461737442ce837f5bc38c895a29_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/7241e71fc5fa402d8c901f5cc639e74e_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/30e5db67dfee4d31abc90f4b4a620024_v1.json",1]}], 
+                statistics: PartStatistics { read_rows: 10000000, read_bytes: 80319472, partitions_scanned: 16, partitions_total: 16, is_exact: false }, 
+                description: "(Read from 'test_tenant'.'default'.'t1' table, Approximately Read Rows:10000000, Read Bytes:80319472, Partitions Scanned:16, Partitions Total:16)", tbl_args: None, 
+                push_downs: Some(PushDownInfo { projection: Some([0, 1]), filters: [(j > 19)], prewhere: Some(PrewhereInfo { output_columns: [0, 1], prewhere_columns: [1], remain_columns: [0], filter: (j > 19) }), limit: None, order_by: [] }) }, table_index: 0 }), 
+                schema: DataSchema { fields: [DataField { name: "0", data_type: Int32, nullable: false }, DataField { name: "1", data_type: Int32, nullable: false }], metadata: {} }, kind: Merge, keys: [], destination_fragment_id: 1, 
+                destinations: ["BOfGfeJkegA59w9cTc3hg5", "fENJvqUPuhzFgfUvaHNIM7", "onyBIswYHxqmj2IuvcxaH4"], query_id: "3e71b1d4-31a3-413e-aba6-39fc7237ff2e" })), 
+                executor: "fENJvqUPuhzFgfUvaHNIM7" }, 
+                
+    QueryFragmentAction { payload: PhysicalPlan(ExchangeSink(ExchangeSink { input: TableScan(TableScan { name_mapping: {"i": "0", "j": "1"}, source: DataSourcePlan { catalog: "default", source_info: TableSource(TableInfo { ident: TableIdent { table_id: 10, seq: 19 }, desc: "'test_tenant'.'default'.'t1'", name: "t1", meta: TableMeta { schema: DataSchema { fields: [DataField { name: "i", data_type: Int32, nullable: false }, DataField { name: "j", data_type: Int32, nullable: false }], metadata: {} }, catalog: "default", engine: "FUSE", engine_options: {}, storage_params: None, options: {"database_id": "1", "snapshot_location": "1/10/_ss/ef2aa92b11c94b12bfa78e3eedda34dd_v1.json"}, default_cluster_key: None, cluster_keys: [], default_cluster_key_id: None, created_on: 2022-11-08T07:14:38.873399335Z, updated_on: 2022-11-08T07:14:38.873400858Z, comment: "", field_comments: ["", ""], drop_on: None, statistics: TableStatistics { number_of_rows: 10000000, data_bytes: 80000000, compressed_data_bytes: 80319472, index_data_bytes: 1538008 } }, tenant: "test_tenant", from_share: None }), scan_fields: None, 
+                parts: 
+                [{"type":"fuse_lazy","segment_location":["1/10/_sg/887357526346464aaf9e27ec34c34da1_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/0a5a882ecef1469392f28cf00fc72ffa_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/772cececc95f40d082537bf6be01e909_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/bee97cf4fe1742e280efeeab9a49312f_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/4388c8c3e20c4c8283cf9f85641a474f_v1.json",1]}, 
+                {"type":"fuse_lazy","segment_location":["1/10/_sg/2b10d23dcdac4972addcce012d614402_v1.json",1]}], 
+                statistics: PartStatistics { read_rows: 10000000, read_bytes: 80319472, partitions_scanned: 16, partitions_total: 16, is_exact: false }, 
+                description: "(Read from 'test_tenant'.'default'.'t1' table, Approximately Read Rows:10000000, Read Bytes:80319472, Partitions Scanned:16, Partitions Total:16)", tbl_args: None, 
+                push_downs: Some(PushDownInfo { projection: Some([0, 1]), filters: [(j > 19)], prewhere: Some(PrewhereInfo { output_columns: [0, 1], prewhere_columns: [1], remain_columns: [0], filter: (j > 19) }), limit: None, order_by: [] }) }, table_index: 0 }), 
+                schema: DataSchema { fields: [DataField { name: "0", data_type: Int32, nullable: false }, DataField { name: "1", data_type: Int32, nullable: false }], metadata: {} }, kind: Merge, keys: [], 
+                destination_fragment_id: 1, destinations: ["BOfGfeJkegA59w9cTc3hg5", "fENJvqUPuhzFgfUvaHNIM7", "onyBIswYHxqmj2IuvcxaH4"], 
+                query_id: "3e71b1d4-31a3-413e-aba6-39fc7237ff2e" })), executor: "onyBIswYHxqmj2IuvcxaH4" }] }, 
+    
+QueryFragmentActions { 
+    fragment_id: 1, exchange_actions: true, data_exchange: None, fragment_actions: 
+        [QueryFragmentAction { payload: PhysicalPlan(Limit(Limit 
+        { input: ExchangeSource(ExchangeSource { schema: DataSchema { fields: [DataField 
+        { name: "0", data_type: Int32, nullable: false }, DataField { name: "1", data_type: Int32, nullable: false }], 
+        metadata: {} }, source_fragment_id: 0, query_id: "3e71b1d4-31a3-413e-aba6-39fc7237ff2e" }), 
+        limit: Some(11), offset: 0 })), executor: "fENJvqUPuhzFgfUvaHNIM7" }] }] }

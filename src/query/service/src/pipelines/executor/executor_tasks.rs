@@ -68,6 +68,7 @@ impl ExecutorTasksQueue {
 
     /// Pull task from the global task queue
     /// Method is thread unsafe and require thread safe call
+    /// where is global?
     pub fn steal_task_to_context(&self, context: &mut ExecutorWorkerContext) {
         let mut workers_tasks = self.workers_tasks.lock();
 

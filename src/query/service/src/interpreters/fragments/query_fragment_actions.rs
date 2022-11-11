@@ -295,7 +295,7 @@ impl QueryFragmentsActions {
         Ok(execute_partial_query_packets)
     }
 
-    /// unique map(source, map(target, vec(fragment_id)))
+    /// unique map(source, map(target, vec(fragment_id))), not s3 segment
     fn fragments_connections(&self) -> HashMap<String, HashMap<String, Vec<usize>>> {
         let mut source_target_fragments = HashMap::<String, HashMap<String, Vec<usize>>>::new();
 

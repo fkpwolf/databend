@@ -94,7 +94,7 @@ pub struct DataSourcePlan {
     /// If it is None, one should use `table_info.schema().fields()`.
     pub scan_fields: Option<BTreeMap<usize, DataField>>,
 
-    pub parts: Partitions,
+    pub parts: Partitions, /* list all aprtiotion like {"type":"fuse_lazy","segment_location":["1/10/_sg/30e127de49c745a8b623504a6267152d_v1.json",1]} */
     pub statistics: PartStatistics,
     pub description: String,
 

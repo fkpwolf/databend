@@ -259,7 +259,7 @@ impl DataExchangeManager {
 
         // Initialize channels between cluster nodes
         actions
-            .get_init_nodes_channel_packets()?
+            .get_init_nodes_channel_packets()? // step 1
             .commit(&self.config, timeout)
             .await?;
 
@@ -269,7 +269,7 @@ impl DataExchangeManager {
 
         // Submit tasks to other nodes!!!
         query_fragments_plan_packets
-            .commit(&self.config, timeout)
+            .commit(&self.config, timeout) // step 2. broadcast?
             .await?;
 
         // Submit tasks to localhost
@@ -279,7 +279,7 @@ impl DataExchangeManager {
         let build_res = self.get_root_pipeline(ctx, root_actions)?;
 
         actions
-            .get_execute_partial_query_packets()?
+            .get_execute_partial_query_packets()? // step 3
             .commit(&self.config, timeout)
             .await?;
         Ok(build_res)

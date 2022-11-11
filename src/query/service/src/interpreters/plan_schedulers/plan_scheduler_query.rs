@@ -32,7 +32,6 @@ pub async fn schedule_query_v2(
     result_columns: &[ColumnBinding],
     plan: &PhysicalPlan,
 ) -> Result<PipelineBuildResult> {
-    info!("schedule_query_v2 1");
     if !plan.is_distributed_plan() {
         let pb = PipelineBuilder::create(ctx.clone());
         let mut build_res = pb.finalize(plan)?;
@@ -45,11 +44,8 @@ pub async fn schedule_query_v2(
         build_res.set_max_threads(ctx.get_settings().get_max_threads()? as usize);
         return Ok(build_res);
     }
-    info!("schedule_query_v2 2");
     let mut build_res = build_schedule_pipeline(ctx.clone(), plan).await?;
-    info!("schedule_query_v2 3");
     let input_schema = plan.output_schema()?;
-    info!("schedule_query_v2 4");
     PipelineBuilder::render_result_set(
         &ctx.try_get_function_context()?,
         input_schema,
@@ -77,8 +73,12 @@ pub async fn build_schedule_pipeline(
         "schedule_query_v2 QueryFragmentActions:\n{}",
         fragments_actions.display_indent()
     );
+    info!(
+        "schedule_query_v2 QueryFragmentActions:\n{:?}", /* 2 fragments. first one has been splittd by node.  all secret, but not pretty print */
+        fragments_actions
+    );
 
-    // this takes most of time!!!
+    // invoke to send 3 messages
     let mut build_res = exchange_manager
         .commit_actions(ctx.clone(), fragments_actions)
         .await?;

@@ -55,7 +55,8 @@ impl SelectInterpreterV2 {
     pub async fn build_pipeline(&self) -> Result<PipelineBuildResult> {
         let builder = PhysicalPlanBuilder::new(self.metadata.clone(), self.ctx.clone());
         let physical_plan = builder.build(&self.s_expr).await?;
-
+        info!("PhysicalPlan:\n{}", physical_plan.format_indent(1));
+        info!("PhysicalPlan raw:\n{:?}", physical_plan); // this PhysicalPlan includes all segment_location, means not be partitioned yet
         if self.ctx.get_cluster().is_empty() {
             let last_schema = physical_plan.output_schema()?;
             let pb = PipelineBuilder::create(self.ctx.clone());
@@ -93,7 +94,7 @@ impl Interpreter for SelectInterpreterV2 {
     async fn execute2(&self) -> Result<PipelineBuildResult> {
         let build_res = self.build_pipeline().await?;
         info!(
-            "generated pipeline:\n{}",
+            "Generated pipeline:\n{}",
             build_res.main_pipeline.display_indent()
         );
         Ok(build_res)

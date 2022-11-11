@@ -132,7 +132,7 @@ impl PlanFragment {
         let mut fragment_actions = QueryFragmentActions::create(true, self.fragment_id);
 
         let partitions = &read_source.parts;
-        let parts_per_node = partitions.len() / executors.len();
+        let parts_per_node = partitions.len() / executors.len(); // so just evenly split!!!
 
         for (index, executor) in executors.iter().enumerate() {
             let begin = parts_per_node * index;
