@@ -64,6 +64,7 @@ impl Packet for QueryFragmentsPlanPacket {
             )));
         }
 
+        // create client with target executor/node
         let executor = &self.executors_info[&self.executor];
         let mut conn = create_client(config, &executor.flight_address).await?;
         let action = FlightAction::InitQueryFragmentsPlan(InitQueryFragmentsPlan {

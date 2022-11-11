@@ -221,7 +221,7 @@ impl QueryFragmentsActions {
 
             query_fragments_plan_packets.push(QueryFragmentsPlanPacket::create(
                 query_id,
-                executor,
+                executor, // target node
                 fragments,
                 executors_info,
                 cluster.local_id(),

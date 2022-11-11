@@ -268,7 +268,7 @@ impl DataExchangeManager {
 
         // Submit tasks to other nodes!!!
         query_fragments_plan_packets
-            .commit(&self.config, timeout) // step 2. broadcast?
+            .commit(&self.config, timeout) // step 2. broadcast? No. just commit to exector node
             .await?;
 
         // Submit tasks to localhost
@@ -459,12 +459,13 @@ impl QueryCoordinator {
         self.info = Some(QueryInfo {
             query_ctx: ctx.clone(),
             query_id: packet.query_id.clone(),
-            current_executor: packet.executor.clone(),
+            current_executor: packet.executor.clone(), // packet.executor?
             query_executor: None,
         });
 
         for fragment in &packet.fragments {
             self.fragments_coordinator.insert(
+                // insert all QueryFragmentAction which includes all actions for all node?
                 fragment.fragment_id.to_owned(),
                 FragmentCoordinator::create(fragment),
             );
