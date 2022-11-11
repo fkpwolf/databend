@@ -21,6 +21,9 @@ use common_exception::Result;
 use once_cell::sync::OnceCell;
 use opentelemetry::global;
 use opentelemetry::sdk::propagation::TraceContextPropagator;
+use opentelemetry::sdk::trace::config;
+use opentelemetry::sdk::Resource;
+use opentelemetry::KeyValue;
 use sentry_tracing::EventFilter;
 use tracing::Event;
 use tracing::Level;
@@ -152,6 +155,13 @@ pub fn init_logging(name: &str, cfg: &Config) -> Vec<WorkerGuard> {
             .with_service_name(name)
             .with_endpoint(jaeger_agent_endpoint)
             .with_auto_split_batch(true)
+            .with_trace_config(
+                config() // add process tags https://docs.rs/opentelemetry-jaeger/latest/opentelemetry_jaeger/
+                    .with_resource(Resource::new(vec![KeyValue::new(
+                        "node",
+                        env::var("NODE_NAME").unwrap_or_else(|_| "".to_string()), // evaluated at running
+                    )])),
+            )
             .install_batch(opentelemetry::runtime::Tokio)
             .expect("install");
 
