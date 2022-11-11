@@ -117,7 +117,6 @@ impl PipelineBuilder {
     }
 
     fn build_pipeline(&mut self, plan: &PhysicalPlan) -> Result<()> {
-        print!("build_pipeline:{:?}", plan);
         match plan {
             PhysicalPlan::TableScan(scan) => self.build_table_scan(scan),
             PhysicalPlan::Filter(filter) => self.build_filter(filter),

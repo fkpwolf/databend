@@ -92,7 +92,7 @@ impl ExecutingGraph {
     pub fn create(pipeline: Pipeline) -> Result<ExecutingGraph> {
         let mut graph = StableGraph::new();
         Self::init_graph(&pipeline, &mut graph);
-        debug!("Create executing graph:{:?}", graph);
+        debug!("Create executing graph by create:{:?}", graph);
         Ok(ExecutingGraph { graph })
     }
 
@@ -102,7 +102,7 @@ impl ExecutingGraph {
         for pipeline in &pipelines {
             Self::init_graph(pipeline, &mut graph);
         }
-        debug!("Create executing graph:{:?}", graph);
+        debug!("Create executing graph by from_pipelines:{:?}", graph);
         Ok(ExecutingGraph { graph })
     }
 
@@ -321,7 +321,7 @@ impl ScheduleQueue {
     pub fn schedule(mut self, global: &ExecutorTasksQueue, context: &mut ExecutorWorkerContext) {
         debug_assert!(!context.has_task());
 
-        // looks never put tasks to global queue again?
+        // looks never put tasks back to global queue again?
         match self.sync_queue.is_empty() {
             false => self.schedule_sync(global, context),
             true if !self.async_queue.is_empty() => self.schedule_async(global, context),

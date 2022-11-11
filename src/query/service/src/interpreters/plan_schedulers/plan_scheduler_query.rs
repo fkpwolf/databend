@@ -44,7 +44,9 @@ pub async fn schedule_query_v2(
         build_res.set_max_threads(ctx.get_settings().get_max_threads()? as usize);
         return Ok(build_res);
     }
+
     let mut build_res = build_schedule_pipeline(ctx.clone(), plan).await?;
+
     let input_schema = plan.output_schema()?;
     PipelineBuilder::render_result_set(
         &ctx.try_get_function_context()?,
@@ -52,7 +54,6 @@ pub async fn schedule_query_v2(
         result_columns,
         &mut build_res.main_pipeline,
     )?;
-    info!("schedule_query_v2 5");
     Ok(build_res)
 }
 
