@@ -215,9 +215,11 @@ impl PipelineExecutor {
 
             let mut tasks = VecDeque::new();
             while let Some(task) = init_schedule_queue.pop_task() {
+                info!("add task {:?}", task); // at most case, the task is always FuseEngineSource by different partition. no other continuing task here
                 tasks.push_back(task);
             }
 
+            info!("global_tasks_queue tasks count {}", tasks.len());
             self.global_tasks_queue.init_tasks(tasks);
 
             Ok(())
@@ -309,18 +311,25 @@ impl PipelineExecutor {
 
         let workers_condvar = self.workers_condvar.clone();
         let mut context = ExecutorWorkerContext::create(thread_num, workers_condvar);
+        info!("context has task after created? {}", context.has_task()); // false. start from stealing
 
         while !self.global_tasks_queue.is_finished() {
             // When there are not enough tasks, the thread will be blocked, so we need loop check.
             // otherwise the thread will be closed? not reused?
             while !self.global_tasks_queue.is_finished() && !context.has_task() {
-                self.global_tasks_queue.steal_task_to_context(&mut context);
+                self.global_tasks_queue.steal_task_to_context(&mut context); // steal to current context
             }
 
             while !self.global_tasks_queue.is_finished() && context.has_task() {
                 if let Some(executed_pid) = context.execute_task(self)? {
                     // We immediately schedule the processor again.
                     let schedule_queue = self.graph.schedule_queue(executed_pid)?;
+                    info!(
+                        "after executed {:?}, the queue now is: {:?}",
+                        executed_pid, // index in execute graph
+                        schedule_queue
+                    );
+                    // context has a self queue. why not put all task to global queue so tasks are more evenly across all threads on same node
                     schedule_queue.schedule(&self.global_tasks_queue, &mut context);
                 }
             }

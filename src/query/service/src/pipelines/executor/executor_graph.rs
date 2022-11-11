@@ -321,6 +321,7 @@ impl ScheduleQueue {
     pub fn schedule(mut self, global: &ExecutorTasksQueue, context: &mut ExecutorWorkerContext) {
         debug_assert!(!context.has_task());
 
+        // looks never put tasks to global queue again?
         match self.sync_queue.is_empty() {
             false => self.schedule_sync(global, context),
             true if !self.async_queue.is_empty() => self.schedule_async(global, context),

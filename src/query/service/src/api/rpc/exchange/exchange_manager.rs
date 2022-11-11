@@ -579,6 +579,7 @@ impl QueryCoordinator {
 
         let executor_settings = ExecutorSettings::try_create(&info.query_ctx.get_settings())?;
 
+        // build execute graph, each node has different graph based on partition data
         let executor = PipelineCompleteExecutor::from_pipelines(pipelines, executor_settings)?;
 
         self.fragment_exchanges.clear();
