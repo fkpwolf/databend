@@ -168,6 +168,7 @@ impl Processor for FuseTableSource {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "FuseTableSource.process")]
     fn process(&mut self) -> Result<()> {
         match std::mem::replace(&mut self.state, State::Finish) {
             State::Deserialize(part, chunks, prewhere_data) => {
@@ -279,6 +280,7 @@ impl Processor for FuseTableSource {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all, name = "FuseTableSource.async_process")] // invoke by await
     async fn async_process(&mut self) -> Result<()> {
         match std::mem::replace(&mut self.state, State::Finish) {
             State::ReadDataPrewhere(Some(part)) => {

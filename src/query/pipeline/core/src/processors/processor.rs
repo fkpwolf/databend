@@ -52,7 +52,7 @@ pub trait Processor: Send {
         Err(ErrorCode::Unimplemented("Unimplemented process."))
     }
 
-    // Asynchronous work.
+    // Asynchronous work. async Future, use 'await' to invoke?
     async fn async_process(&mut self) -> Result<()> {
         Err(ErrorCode::Unimplemented("Unimplemented async_process."))
     }
@@ -116,7 +116,11 @@ impl ProcessorPtr {
     }
 
     /// # Safety
+    #[tracing::instrument(level = "debug", skip_all, name = "ProcessorPtr.async_process")]
     pub unsafe fn async_process(&self) -> BoxFuture<'static, Result<()>> {
-        (*self.inner.get()).async_process().boxed()
+        let p = self.inner.get();
+        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
+        info!("execute async process:{} on {}", (*p).name(), node_name);
+        (*p).async_process().boxed() // Future, invoked by IO-worker thread
     }
 }

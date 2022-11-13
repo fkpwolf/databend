@@ -20,6 +20,7 @@ use common_base::base::TrySpawn;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use petgraph::prelude::NodeIndex;
+use tracing::info;
 
 use crate::pipelines::executor::executor_condvar::WorkersCondvar;
 use crate::pipelines::executor::executor_tasks::CompletedAsyncTask;
@@ -85,15 +86,22 @@ impl ExecutorWorkerContext {
         name = "ExecutorWorkerContext.execute_sync_task"
     )]
     unsafe fn execute_sync_task(&mut self, processor: ProcessorPtr) -> Result<Option<NodeIndex>> {
+        info!("execute_sync_task {}", processor.id().index());
         processor.process()?;
         Ok(Some(processor.id()))
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        name = "ExecutorWorkerContext.execute_async_task"
+    )]
     unsafe fn execute_async_task(
         &mut self,
         processor: ProcessorPtr,
         executor: &PipelineExecutor,
     ) -> Result<Option<NodeIndex>> {
+        info!("execute_async_task {}", processor.id().index());
         let worker_id = self.worker_num;
         let workers_condvar = self.get_workers_condvar().clone();
         let tasks_queue = executor.global_tasks_queue.clone();

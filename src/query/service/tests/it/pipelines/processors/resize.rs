@@ -25,7 +25,7 @@ use databend_query::pipelines::processors::ResizeProcessor;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_resize_output_finish() -> Result<()> {
-    let mut resize_processor = ResizeProcessor::create(8, 1);
+    let mut resize_processor = ResizeProcessor::create(8, 1); // 8 input, 1 output
     let resize_inputs = connect_inputs(resize_processor.get_inputs());
     let resize_outputs = connect_outputs(resize_processor.get_outputs());
 

@@ -25,6 +25,7 @@ use petgraph::prelude::NodeIndex;
 use petgraph::prelude::StableGraph;
 use petgraph::Direction;
 use tracing::debug;
+use tracing::info;
 
 use crate::pipelines::executor::executor_tasks::ExecutorTasksQueue;
 use crate::pipelines::executor::executor_worker_context::ExecutorTask;
@@ -217,10 +218,11 @@ impl ExecutingGraph {
         index: NodeIndex,
         schedule_queue: &mut ScheduleQueue,
     ) -> Result<()> {
+        debug!("schedule_queue next step of node: {:?}", index);
         let mut need_schedule_nodes = VecDeque::new();
         let mut need_schedule_edges = VecDeque::new();
 
-        need_schedule_nodes.push_back(index);
+        need_schedule_nodes.push_back(index); // the index node has completed
         while !need_schedule_nodes.is_empty() || !need_schedule_edges.is_empty() {
             // To avoid lock too many times, we will try to cache lock.
             let mut state_guard_cache = None;
@@ -234,6 +236,11 @@ impl ExecutingGraph {
 
                 if matches!(*node_state, State::Idle) {
                     state_guard_cache = Some(node_state);
+                    debug!(
+                        "candidate node: {:?} of edge: {:?}",
+                        target_index,
+                        edge.print(&locker.graph)
+                    );
                     need_schedule_nodes.push_back(target_index);
                 }
             }
@@ -244,7 +251,7 @@ impl ExecutingGraph {
                 if state_guard_cache.is_none() {
                     state_guard_cache = Some(node.state.lock().unwrap());
                 }
-                let event = node.processor.event()?;
+                let event = node.processor.event()?; // refresh status?
                 if tracing::enabled!(tracing::Level::TRACE) {
                     tracing::trace!(
                         "node id: {:?}, name: {:?}, event: {:?}",
@@ -253,20 +260,49 @@ impl ExecutingGraph {
                         event
                     );
                 }
+                debug!(
+                    "node id: {:?}, name: {:?}, event: {:?}",
+                    node.processor.id(),
+                    node.processor.name(),
+                    event
+                );
                 let processor_state = match event {
                     Event::Finished => State::Finished,
                     Event::NeedData | Event::NeedConsume => State::Idle,
                     Event::Sync => {
+                        debug!(
+                            "schedule sync node: {:?}, name: {:?}",
+                            node.processor.id(),
+                            node.processor.name()
+                        );
                         schedule_queue.push_sync(node.processor.clone());
                         State::Processing
                     }
                     Event::Async => {
+                        debug!(
+                            "schedule async node: {:?}, name: {:?}",
+                            node.processor.id(),
+                            node.processor.name()
+                        );
                         schedule_queue.push_async(node.processor.clone());
                         State::Processing
                     }
                 };
 
-                node.trigger(&mut need_schedule_edges);
+                let before_list = need_schedule_edges
+                    .iter()
+                    .map(|x| x.print(&locker.graph))
+                    .collect::<Vec<String>>();
+                info!("need_schedule_edges before: {:?}", before_list);
+
+                node.trigger(&mut need_schedule_edges); // put candidated edge
+
+                let after_list = need_schedule_edges
+                    .iter()
+                    .map(|x| x.print(&locker.graph))
+                    .collect::<Vec<String>>();
+                info!("need_schedule_edges after: {:?}", after_list);
+
                 *state_guard_cache.unwrap() = processor_state;
             }
         }

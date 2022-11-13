@@ -31,7 +31,7 @@ impl GlobalIORuntime {
 
         v.init(Arc::new(Runtime::with_worker_threads(
             thread_num,
-            Some("IO-worker".to_owned()),
+            Some("IO-worker".to_owned()), // thread pool which reads S3 block & do Flight? NIO?
         )?))?;
 
         GLOBAL_RUNTIME.set(v.clone()).ok();

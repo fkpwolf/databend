@@ -46,6 +46,19 @@ impl DirectedEdge {
         }
     }
 
+    pub fn print<N, E>(&self, graph: &StableGraph<N, E>) -> String {
+        match self {
+            DirectedEdge::Source(edge_index) => match graph.edge_endpoints(*edge_index) {
+                Some((source, target)) => format!("{}->{}", source.index(), target.index()),
+                None => "n/a".to_owned(),
+            },
+            DirectedEdge::Target(edge_index) => match graph.edge_endpoints(*edge_index) {
+                Some((target, source)) => format!("{}->{}", source.index(), target.index()),
+                None => "n/a".to_owned(),
+            },
+        }
+    }
+
     pub fn get_target<N: Debug, E: Debug>(&self, graph: &StableGraph<N, E>) -> Result<NodeIndex> {
         match self {
             DirectedEdge::Source(edge_index) => match graph.edge_endpoints(*edge_index) {
