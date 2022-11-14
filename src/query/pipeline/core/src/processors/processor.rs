@@ -14,7 +14,6 @@
 
 use std::any::Any;
 use std::cell::UnsafeCell;
-use std::env;
 use std::sync::Arc;
 
 use common_exception::ErrorCode;
@@ -23,7 +22,6 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use petgraph::graph::node_index;
 use petgraph::prelude::NodeIndex;
-use tracing::info;
 
 #[derive(Debug)]
 pub enum Event {
@@ -107,20 +105,23 @@ impl ProcessorPtr {
     }
 
     /// # Safety
-    #[tracing::instrument(level = "debug", skip_all, name = "ProcessorPtr.process")]
+    #[tracing::instrument(level = "debug", skip_all, name = "ProcessorPtr.process", fields(act))]
     pub unsafe fn process(&self) -> Result<()> {
         let p = self.inner.get();
-        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
-        info!("execute process:{} on {}", (*p).name(), node_name);
+        tracing::Span::current().record("act", (*p).name());
         (*p).process()
     }
 
     /// # Safety
-    #[tracing::instrument(level = "debug", skip_all, name = "ProcessorPtr.async_process")]
+    #[tracing::instrument(
+        level = "debug",
+        skip_all,
+        name = "ProcessorPtr.async_process",
+        fields(act)
+    )]
     pub unsafe fn async_process(&self) -> BoxFuture<'static, Result<()>> {
         let p = self.inner.get();
-        let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
-        info!("execute async process:{} on {}", (*p).name(), node_name);
+        tracing::Span::current().record("act", (*p).name());
         (*p).async_process().boxed() // Future, invoked by IO-worker thread
     }
 }
