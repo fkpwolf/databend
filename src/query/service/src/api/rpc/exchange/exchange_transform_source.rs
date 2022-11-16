@@ -177,8 +177,14 @@ impl ExchangeSourceTransform {
             &Default::default(),
         )?;
 
-        // send to outputport at line 97?
-        self.output_data = Some(DataBlock::from_chunk(schema, &batch)?);
+        let meta = match bincode::deserialize(fragment_data.get_meta()) {
+            Ok(meta) => Ok(meta),
+            Err(_) => Err(ErrorCode::BadBytes(
+                "block meta deserialize error when exchange",
+            )),
+        }?;
+
+        self.output_data = Some(DataBlock::from_chunk(schema, &batch)?.add_meta(meta)?);
 
         Ok(())
     }
