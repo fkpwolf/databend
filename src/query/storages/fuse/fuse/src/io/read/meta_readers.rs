@@ -21,13 +21,17 @@ use common_storages_table_meta::meta::SegmentInfo;
 use common_storages_table_meta::meta::SegmentInfoVersion;
 use common_storages_table_meta::meta::SnapshotVersion;
 use common_storages_table_meta::meta::TableSnapshot;
-use opendal::BytesReader;
+use common_storages_table_meta::meta::TableSnapshotStatistics;
+use common_storages_table_meta::meta::TableSnapshotStatisticsVersion;
+use opendal::raw::BytesReader;
 use opendal::Operator;
 
 use super::versioned_reader::VersionedReader;
 
 pub type SegmentInfoReader = CachedReader<SegmentInfo, LoaderWrapper<Operator>>;
 pub type TableSnapshotReader = CachedReader<TableSnapshot, LoaderWrapper<Operator>>;
+pub type TableSnapshotStatisticsReader =
+    CachedReader<TableSnapshotStatistics, LoaderWrapper<Operator>>;
 pub type BloomIndexFileMetaDataReader = CachedReader<FileMetaData, Operator>;
 
 pub struct MetaReaders;
@@ -45,6 +49,14 @@ impl MetaReaders {
         TableSnapshotReader::new(
             CacheManager::instance().get_table_snapshot_cache(),
             "SNAPSHOT_CACHE".to_owned(),
+            LoaderWrapper(dal),
+        )
+    }
+
+    pub fn table_snapshot_statistics_reader(dal: Operator) -> TableSnapshotStatisticsReader {
+        TableSnapshotStatisticsReader::new(
+            CacheManager::instance().get_table_snapshot_statistics_cache(),
+            "TABLE_STATISTICS_CACHE".to_owned(),
             LoaderWrapper(dal),
         )
     }
@@ -77,6 +89,20 @@ impl Loader<TableSnapshot> for LoaderWrapper<Operator> {
 }
 
 #[async_trait::async_trait]
+impl Loader<TableSnapshotStatistics> for LoaderWrapper<Operator> {
+    async fn load(
+        &self,
+        key: &str,
+        length_hint: Option<u64>,
+        version: u64,
+    ) -> Result<TableSnapshotStatistics> {
+        let version = TableSnapshotStatisticsVersion::try_from(version)?;
+        let reader = bytes_reader(&self.0, key, length_hint).await?;
+        version.read(reader).await
+    }
+}
+
+#[async_trait::async_trait]
 impl Loader<SegmentInfo> for LoaderWrapper<Operator> {
     async fn load(&self, key: &str, length_hint: Option<u64>, version: u64) -> Result<SegmentInfo> {
         let version = SegmentInfoVersion::try_from(version)?;
@@ -97,6 +123,6 @@ async fn bytes_reader(op: &Operator, path: &str, len: Option<u64>) -> Result<Byt
         }
     };
 
-    let reader = object.range_reader(..len).await?;
+    let reader = object.range_reader(0..len).await?;
     Ok(Box::new(reader))
 }

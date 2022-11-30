@@ -37,7 +37,8 @@ num_cpus = 0
 mysql_handler_host = "127.0.0.1"
 mysql_handler_port = 3307
 max_active_sessions = 256
-max_memory_usage = 0
+max_server_memory_usage = 0
+max_memory_limit_enabled = false
 clickhouse_handler_host = "127.0.0.1"
 clickhouse_handler_port = 9000
 clickhouse_http_handler_host = "127.0.0.1"
@@ -68,6 +69,7 @@ table_memory_cache_mb_size = 256
 table_disk_cache_root = "_cache"
 table_disk_cache_mb_size = 1024
 table_cache_snapshot_count = 256
+table_cache_statistic_count = 256
 table_cache_segment_count = 10240
 table_cache_bloom_index_meta_count = 3000
 table_cache_bloom_index_data_bytes = 1073741824
@@ -97,9 +99,7 @@ level = "INFO"
 format = "text"
 
 [meta]
-type = "fallback"
-embedded_dir = "./.databend/meta_embedded"
-address = ""
+embedded_dir = ""
 endpoints = []
 username = "root"
 password = ""
@@ -160,14 +160,25 @@ bucket = ""
 endpoint_url = ""
 root = ""
 
-[cache]
-type = "moka"
+[storage.cache]
+type = "none"
 num_cpus = 0
 
-[cache.fs]
+[storage.cache.fs]
 data_path = "_data"
 
-[cache.moka]
+[storage.cache.moka]
+max_capacity = 1073741824
+time_to_live = 3600
+time_to_idle = 600
+
+[storage.cache.redis]
+endpoint_url = ""
+username = ""
+password = ""
+root = ""
+db = 0
+default_ttl = 0
 
 [catalog]
 address = ""
@@ -208,6 +219,7 @@ fn test_env_config_s3() -> Result<()> {
             ("QUERY_TABLE_DISK_CACHE_MB_SIZE", Some("512")),
             ("QUERY_TABLE_CACHE_SNAPSHOT_COUNT", Some("256")),
             ("QUERY_TABLE_CACHE_SEGMENT_COUNT", Some("10240")),
+            ("META_ENDPOINTS", Some("0.0.0.0:9191")),
             ("TABLE_CACHE_BLOOM_INDEX_META_COUNT", Some("3000")),
             (
                 "TABLE_CACHE_BLOOM_INDEX_DATA_BYTES",
@@ -257,6 +269,9 @@ fn test_env_config_s3() -> Result<()> {
             assert_eq!("1.2.3.4:9091", configured.query.flight_api_address);
             assert_eq!("1.2.3.4:8081", configured.query.admin_api_address);
             assert_eq!("1.2.3.4:7071", configured.query.metric_api_address);
+
+            assert_eq!(1, configured.meta.endpoints.len());
+            assert_eq!("0.0.0.0:9191", configured.meta.endpoints[0]);
 
             assert_eq!("s3", configured.storage.storage_type);
             assert_eq!(16, configured.storage.storage_num_cpus);
@@ -322,6 +337,7 @@ fn test_env_config_fs() -> Result<()> {
             ("QUERY_TABLE_DISK_CACHE_MB_SIZE", Some("512")),
             ("QU-ERY_TABLE_CACHE_SNAPSHOT_COUNT", Some("256")),
             ("QUERY_TABLE_CACHE_SEGMENT_COUNT", Some("10240")),
+            ("META_ENDPOINTS", Some("0.0.0.0:9191")),
             ("TABLE_CACHE_BLOOM_INDEX_META_COUNT", Some("3000")),
             (
                 "TABLE_CACHE_BLOOM_INDEX_DATA_BYTES",
@@ -367,6 +383,9 @@ fn test_env_config_fs() -> Result<()> {
             assert_eq!(8124, configured.query.clickhouse_http_handler_port);
             assert_eq!("1.2.3.4", configured.query.http_handler_host);
             assert_eq!(8001, configured.query.http_handler_port);
+
+            assert_eq!(1, configured.meta.endpoints.len());
+            assert_eq!("0.0.0.0:9191", configured.meta.endpoints[0]);
 
             assert_eq!("1.2.3.4:9091", configured.query.flight_api_address);
             assert_eq!("1.2.3.4:8081", configured.query.admin_api_address);
@@ -437,6 +456,7 @@ fn test_env_config_gcs() -> Result<()> {
             ("QUERY_TABLE_DISK_CACHE_MB_SIZE", Some("512")),
             ("QUERY_TABLE_CACHE_SNAPSHOT_COUNT", Some("256")),
             ("QUERY_TABLE_CACHE_SEGMENT_COUNT", Some("10240")),
+            ("META_ENDPOINTS", Some("0.0.0.0:9191")),
             ("TABLE_CACHE_BLOOM_INDEX_META_COUNT", Some("3000")),
             (
                 "TABLE_CACHE_BLOOM_INDEX_DATA_BYTES",
@@ -482,6 +502,9 @@ fn test_env_config_gcs() -> Result<()> {
             assert_eq!(8124, configured.query.clickhouse_http_handler_port);
             assert_eq!("1.2.3.4", configured.query.http_handler_host);
             assert_eq!(8001, configured.query.http_handler_port);
+
+            assert_eq!(1, configured.meta.endpoints.len());
+            assert_eq!("0.0.0.0:9191", configured.meta.endpoints[0]);
 
             assert_eq!("1.2.3.4:9091", configured.query.flight_api_address);
             assert_eq!("1.2.3.4:8081", configured.query.admin_api_address);
@@ -559,6 +582,7 @@ fn test_env_config_oss() -> Result<()> {
             ("QUERY_TABLE_DISK_CACHE_MB_SIZE", Some("512")),
             ("QUERY_TABLE_CACHE_SNAPSHOT_COUNT", Some("256")),
             ("QUERY_TABLE_CACHE_SEGMENT_COUNT", Some("10240")),
+            ("META_ENDPOINTS", Some("0.0.0.0:9191")),
             ("TABLE_CACHE_BLOOM_INDEX_META_COUNT", Some("3000")),
             (
                 "TABLE_CACHE_BLOOM_INDEX_DATA_BYTES",
@@ -608,6 +632,9 @@ fn test_env_config_oss() -> Result<()> {
             assert_eq!("1.2.3.4:9091", configured.query.flight_api_address);
             assert_eq!("1.2.3.4:8081", configured.query.admin_api_address);
             assert_eq!("1.2.3.4:7071", configured.query.metric_api_address);
+
+            assert_eq!(1, configured.meta.endpoints.len());
+            assert_eq!("0.0.0.0:9191", configured.meta.endpoints[0]);
 
             assert_eq!("oss", configured.storage.storage_type);
             assert_eq!(16, configured.storage.storage_num_cpus);
@@ -678,7 +705,7 @@ num_cpus = 0
 mysql_handler_host = "127.0.0.1"
 mysql_handler_port = 3307
 max_active_sessions = 256
-max_memory_usage = 0
+max_server_memory_usage = 0
 clickhouse_handler_host = "127.0.0.1"
 clickhouse_handler_port = 9000
 clickhouse_http_handler_host = "127.0.0.1"
@@ -726,9 +753,7 @@ dir = "./.databend/logs"
 query_enabled = false
 
 [meta]
-embedded_dir = "./.databend/meta_embedded"
-address = ""
-endpoints = []
+endpoints = ["0.0.0.0:9191"]
 username = "username_from_file"
 password = "password_from_file"
 client_timeout_in_second = 10

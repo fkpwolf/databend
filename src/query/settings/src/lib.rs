@@ -121,11 +121,11 @@ impl Settings {
             // Set max memory usage.
             {
                 if ret.get_max_memory_usage()? == 0 {
-                    let max_usage = if conf.query.max_memory_usage == 0 {
+                    let max_usage = if conf.query.max_server_memory_usage == 0 {
                         ret.check_and_get_default_value("max_memory_usage")?
                             .as_u64()?
                     } else {
-                        conf.query.max_memory_usage
+                        conf.query.max_server_memory_usage
                     };
                     ret.set_max_memory_usage(max_usage)?;
                 }
@@ -252,6 +252,16 @@ impl Settings {
                 ),
                 level: ScopeLevel::Session,
                 desc: "Format field delimiter, default value is \"\": use default of the format.",
+                possible_values: None,
+            },
+            SettingValue {
+                default_value: UserSettingValue::String("".to_owned()),
+                user_setting: UserSetting::create(
+                    "format_nan_display",
+                    UserSettingValue::String("".to_owned()),
+                ),
+                level: ScopeLevel::Session,
+                desc: "must be literal `nan` or `null` (case-sensitive), default value is \"\".",
                 possible_values: None,
             },
             SettingValue {
@@ -471,6 +481,16 @@ impl Settings {
                 desc: "How many hours will the COPY file metadata expired in the metasrv, default value: 24*7=7days",
                 possible_values: None,
             },
+            SettingValue {
+                default_value: UserSettingValue::UInt64(1),
+                user_setting: UserSetting::create(
+                    "insert_values_enable_expression",
+                    UserSettingValue::UInt64(1),
+                ),
+                level: ScopeLevel::Session,
+                desc: "Whether to enable expression when inserting values, if your values do not have expressions please disable this setting to improve write performance, default value: 1.",
+                possible_values: None,
+            },
         ];
 
         let settings: Arc<DashMap<String, SettingValue>> = Arc::new(DashMap::default());
@@ -572,6 +592,12 @@ impl Settings {
 
     pub fn get_format_record_delimiter(&self) -> Result<String> {
         let key = "format_record_delimiter";
+        self.check_and_get_setting_value(key)
+            .and_then(|v| v.user_setting.value.as_string())
+    }
+
+    pub fn get_format_nan_display(&self) -> Result<String> {
+        let key = "format_nan_display";
         self.check_and_get_setting_value(key)
             .and_then(|v| v.user_setting.value.as_string())
     }
@@ -757,6 +783,11 @@ impl Settings {
     pub fn get_load_file_metadata_expire_hours(&self) -> Result<u64> {
         let key = "load_file_metadata_expire_hours";
         self.try_get_u64(key)
+    }
+
+    pub fn get_insert_values_enable_expression(&self) -> Result<u64> {
+        static KEY: &str = "insert_values_enable_expression";
+        self.try_get_u64(KEY)
     }
 
     pub fn has_setting(&self, key: &str) -> bool {

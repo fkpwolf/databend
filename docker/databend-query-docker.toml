@@ -36,9 +36,7 @@ level = "INFO"
 dir = "./.databend/logs"
 
 [meta]
-# To enable embedded meta-store, set address to ""
-embedded_dir = "_meta_embedded_1"
-address = "0.0.0.0:9191"
+endpoints = ["0.0.0.0:9191"]
 username = "root"
 password = "root"
 client_timeout_in_second = 60
@@ -50,4 +48,4 @@ type = "fs"
 
 # fs storage.
 [storage.fs]
-data_path = "stateless_test_data"
+data_path = "./.databend/data"

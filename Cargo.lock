@@ -30,9 +30,9 @@ dependencies = [
 
 [[package]]
 name = "ahash"
-version = "0.8.0"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57e6e951cfbb2db8de1828d49073a113a29fd7117b1596caa781a258c7e38d72"
+checksum = "bf6ccdb167abbf410dcb915cabd428929d7f6a04980b54a11f26a39f1c7f7107"
 dependencies = [
  "cfg-if",
  "getrandom 0.2.7",
@@ -1325,7 +1325,6 @@ dependencies = [
  "serde",
  "serfig",
  "strum",
- "strum_macros",
  "tracing",
 ]
 
@@ -1333,7 +1332,7 @@ dependencies = [
 name = "common-datablocks"
 version = "0.1.0"
 dependencies = [
- "ahash 0.8.0",
+ "ahash 0.8.2",
  "comfy-table",
  "common-arrow",
  "common-datavalues",
@@ -1384,6 +1383,7 @@ dependencies = [
  "anyhow",
  "bincode 2.0.0-rc.2",
  "common-arrow",
+ "opendal",
  "paste",
  "prost",
  "serde",
@@ -1455,6 +1455,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "common-arrow",
+ "common-base",
  "common-datablocks",
  "common-datavalues",
  "common-exception",
@@ -1506,6 +1507,7 @@ dependencies = [
  "comfy-table",
  "common-arrow",
  "common-ast",
+ "common-base",
  "common-exception",
  "common-expression",
  "common-hashtable",
@@ -1552,7 +1554,7 @@ dependencies = [
 name = "common-hashtable"
 version = "0.1.0"
 dependencies = [
- "ahash 0.8.0",
+ "ahash 0.8.2",
  "bumpalo",
  "cfg-if",
  "common-base",
@@ -1609,15 +1611,6 @@ dependencies = [
  "fast-float",
  "ordered-float 3.3.0",
  "serde_json",
-]
-
-[[package]]
-name = "common-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1808,6 +1801,7 @@ dependencies = [
  "chrono",
  "common-building",
  "common-exception",
+ "common-io",
  "common-meta-stoerr",
  "common-storage",
  "derive_more",
@@ -1986,7 +1980,7 @@ dependencies = [
 name = "common-sql"
 version = "0.1.0"
 dependencies = [
- "ahash 0.8.0",
+ "ahash 0.8.2",
  "async-channel",
  "async-recursion",
  "async-stream",
@@ -2487,6 +2481,7 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "snailquote",
+ "tikv-jemalloc-ctl",
  "tracing",
  "typetag",
  "uuid",
@@ -2997,7 +2992,6 @@ dependencies = [
  "common-config",
  "common-exception",
  "common-grpc",
- "common-macros",
  "common-meta-api",
  "common-meta-app",
  "common-meta-client",
@@ -3076,7 +3070,7 @@ dependencies = [
 name = "databend-query"
 version = "0.1.0"
 dependencies = [
- "ahash 0.8.0",
+ "ahash 0.8.2",
  "async-channel",
  "async-recursion",
  "async-stream",
@@ -4125,7 +4119,7 @@ version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7d52875c47f35a0db141bef968682165623e7d1671a0da40b87f581a3a953fd"
 dependencies = [
- "ahash 0.8.0",
+ "ahash 0.8.2",
  "geo",
  "geo-types",
  "h3ron-h3-sys",
@@ -5672,9 +5666,9 @@ checksum = "0ab1bc2a289d34bd04a330323ac98a1b4bc82c9d9fcb1e66b63caa84da26b575"
 
 [[package]]
 name = "opendal"
-version = "0.19.8"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8759e3041052861fec2980cf07dcd0e6d612346003680119494badd8aba884b0"
+checksum = "e093402bdf1033677db972e0f5ac349e3ec251fe99b5db91b1472180c1f48254"
 dependencies = [
  "anyhow",
  "async-compat",
@@ -8622,7 +8616,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -8760,7 +8754,6 @@ checksum = "b97acb4c28a254fd7a4aeec976c46a7fa404eac4d7c134b30c75144846d7cb8f"
 dependencies = [
  "base64",
  "chunked_transfer",
- "flate2",
  "log",
  "once_cell",
  "rustls",
