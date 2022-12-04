@@ -32,9 +32,6 @@ use common_meta_types::UserSettingValue;
 use common_users::UserApiProvider;
 use dashmap::DashMap;
 use itertools::Itertools;
-use sysinfo::CpuRefreshKind;
-use sysinfo::RefreshKind;
-use sysinfo::SystemExt;
 
 #[derive(Clone)]
 pub enum ScopeLevel {
@@ -81,7 +78,7 @@ impl Settings {
         user_api: Arc<UserApiProvider>,
         tenant: String,
     ) -> Result<Arc<Settings>> {
-        let settings = Self::default_settings(&tenant);
+        let settings = Self::default_settings(&tenant)?;
 
         let ret = {
             // Overwrite settings from metasrv
@@ -135,7 +132,9 @@ impl Settings {
         Ok(ret)
     }
 
-    pub fn default_settings(tenant: &str) -> Arc<Settings> {
+    pub fn default_settings(tenant: &str) -> Result<Arc<Settings>> {
+        let memory_info = sys_info::mem_info().map_err(ErrorCode::from_std_error)?;
+        let num_cpus = sys_info::cpu_num().map_err(ErrorCode::from_std_error)?;
         let values = vec![
             // max_block_size
             SettingValue {
@@ -150,13 +149,7 @@ impl Settings {
             },
             // max_threads
             SettingValue {
-                default_value: UserSettingValue::UInt64(
-                    sysinfo::System::new_with_specifics(
-                        RefreshKind::new().with_cpu(CpuRefreshKind::everything()),
-                    )
-                    .cpus()
-                    .len() as u64,
-                ),
+                default_value: UserSettingValue::UInt64(num_cpus as u64),
                 user_setting: UserSetting::create("max_threads", UserSettingValue::UInt64(0)),
                 level: ScopeLevel::Session,
                 desc: "The maximum number of threads to execute the request. By default the value is determined automatically.",
@@ -164,9 +157,7 @@ impl Settings {
             },
             // max_memory_usage
             SettingValue {
-                default_value: UserSettingValue::UInt64(
-                    sysinfo::System::new_all().total_memory() * 80 / 100,
-                ),
+                default_value: UserSettingValue::UInt64(memory_info.total * 80 / 100),
                 user_setting: UserSetting::create("max_memory_usage", UserSettingValue::UInt64(0)),
                 level: ScopeLevel::Session,
                 desc: "The maximum memory usage for processing single query, in bytes. By default the value is determined automatically.",
@@ -174,13 +165,13 @@ impl Settings {
             },
             // max_storage_io_requests
             SettingValue {
-                default_value: UserSettingValue::UInt64(1000),
+                default_value: UserSettingValue::UInt64(64),
                 user_setting: UserSetting::create(
                     "max_storage_io_requests",
-                    UserSettingValue::UInt64(1000),
+                    UserSettingValue::UInt64(64),
                 ),
                 level: ScopeLevel::Session,
-                desc: "The maximum number of concurrent IO requests. By default, it is 1000.",
+                desc: "The maximum number of concurrent IO requests. By default, it is 64.",
                 possible_values: None,
             },
             // flight_client_timeout
@@ -503,10 +494,10 @@ impl Settings {
             }
         }
 
-        Arc::new(Settings {
+        Ok(Arc::new(Settings {
             tenant: tenant.to_string(),
             settings,
-        })
+        }))
     }
 
     // Get max_block_size.

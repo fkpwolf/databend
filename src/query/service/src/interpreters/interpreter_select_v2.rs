@@ -34,6 +34,7 @@ pub struct SelectInterpreterV2 {
     s_expr: SExpr,
     bind_context: BindContext,
     metadata: MetadataRef,
+    ignore_result: bool,
 }
 
 impl SelectInterpreterV2 {
@@ -42,12 +43,14 @@ impl SelectInterpreterV2 {
         bind_context: BindContext,
         s_expr: SExpr,
         metadata: MetadataRef,
+        ignore_result: bool,
     ) -> Result<Self> {
         Ok(SelectInterpreterV2 {
             ctx,
             s_expr,
             bind_context,
             metadata,
+            ignore_result,
         })
     }
 
@@ -56,7 +59,13 @@ impl SelectInterpreterV2 {
         let physical_plan = builder.build(&self.s_expr).await?;
         info!("PhysicalPlan:\n{}", physical_plan.format_indent(1));
         info!("PhysicalPlan raw:\n{:?}", physical_plan); // this PhysicalPlan includes all segment_location, means not be partitioned yet
-        build_query_pipeline(&self.ctx, &self.bind_context.columns, &physical_plan).await
+        build_query_pipeline(
+            &self.ctx,
+            &self.bind_context.columns,
+            &physical_plan,
+            self.ignore_result,
+        )
+        .await
     }
 }
 

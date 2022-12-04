@@ -25,6 +25,7 @@ use common_exception::ErrorCode;
 use common_exception::Result;
 use common_grpc::RpcClientConf;
 use common_grpc::RpcClientTlsConfig;
+use common_meta_types::TenantQuota;
 use common_storage::StorageConfig;
 use common_tracing::Config as LogConfig;
 use common_users::idm_config::IDMConfig;
@@ -61,12 +62,20 @@ impl Config {
     ///
     /// In the future, we could have `ConfigV1` and `ConfigV2`.
     pub fn load() -> Result<Self> {
-        let cfg: Self = OuterV0Config::load()?.try_into()?;
+        let cfg: Self = OuterV0Config::load(true)?.try_into()?;
 
         // Only check meta config when cmd is empty.
         if cfg.cmd.is_empty() {
             cfg.meta.check_valid()?;
         }
+        Ok(cfg)
+    }
+
+    /// # NOTE
+    ///
+    /// This function is served for tests only.
+    pub fn load_for_test() -> Result<Self> {
+        let cfg: Self = OuterV0Config::load(false)?.try_into()?;
         Ok(cfg)
     }
 
@@ -164,6 +173,7 @@ pub struct QueryConfig {
     pub idm: IDMConfig,
     pub share_endpoint_address: String,
     pub share_endpoint_auth_token_file: String,
+    pub tenant_quota: Option<TenantQuota>,
 }
 
 impl Default for QueryConfig {
@@ -216,6 +226,7 @@ impl Default for QueryConfig {
             idm: IDMConfig::default(),
             share_endpoint_address: "".to_string(),
             share_endpoint_auth_token_file: "".to_string(),
+            tenant_quota: None,
         }
     }
 }

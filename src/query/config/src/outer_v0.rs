@@ -26,6 +26,7 @@ use common_exception::ErrorCode;
 use common_exception::Result;
 use common_meta_types::AuthInfo;
 use common_meta_types::AuthType;
+use common_meta_types::TenantQuota;
 use common_storage::CacheConfig as InnerCacheConfig;
 use common_storage::StorageAzblobConfig as InnerStorageAzblobConfig;
 use common_storage::StorageConfig as InnerStorageConfig;
@@ -129,8 +130,18 @@ impl Config {
     /// - Load from file as default.
     /// - Load from env, will override config from file.
     /// - Load from args as finally override
-    pub fn load() -> Result<Self> {
-        let arg_conf = Self::parse();
+    ///
+    /// # Notes
+    ///
+    /// with_args is to control whether we need to load from args or not.
+    /// We should set this to false during tests because we don't want
+    /// our test binary to parse cargo's args.
+    pub fn load(with_args: bool) -> Result<Self> {
+        let mut arg_conf = Self::default();
+
+        if with_args {
+            arg_conf = Self::parse();
+        }
 
         let mut builder: serfig::Builder<Self> = serfig::Builder::default();
 
@@ -153,7 +164,9 @@ impl Config {
         builder = builder.collect(from_env());
 
         // Finally, load from args.
-        builder = builder.collect(from_self(arg_conf));
+        if with_args {
+            builder = builder.collect(from_self(arg_conf));
+        }
 
         Ok(builder.build()?)
     }
@@ -168,7 +181,7 @@ impl From<InnerConfig> for Config {
             log: inner.log.into(),
             meta: inner.meta.into(),
             storage: inner.storage.into(),
-            catalog: HiveCatalogConfig::empty(),
+            catalog: HiveCatalogConfig::default(),
 
             catalogs: inner
                 .catalogs
@@ -365,9 +378,9 @@ impl TryInto<InnerStorageConfig> for StorageConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogConfig {
     #[serde(rename = "type")]
-    ty: String,
+    pub ty: String,
     #[serde(flatten)]
-    hive: CatalogsHiveConfig,
+    pub hive: CatalogsHiveConfig,
 }
 
 impl Default for CatalogConfig {
@@ -388,8 +401,8 @@ pub struct CatalogsHiveConfig {
 }
 
 /// this is the legacy version of external catalog configuration
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Args)]
-#[serde(default = "HiveCatalogConfig::empty")]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Args)]
+#[serde(default)]
 pub struct HiveCatalogConfig {
     #[clap(long = "hive-meta-store-address", default_value_t)]
     #[serde(rename = "address", alias = "meta_store_address")]
@@ -463,21 +476,6 @@ impl From<InnerCatalogHiveConfig> for HiveCatalogConfig {
         Self {
             meta_store_address: inner.address,
             protocol: inner.protocol.to_string(),
-        }
-    }
-}
-
-impl Default for HiveCatalogConfig {
-    fn default() -> Self {
-        InnerCatalogHiveConfig::default().into()
-    }
-}
-
-impl HiveCatalogConfig {
-    pub fn empty() -> Self {
-        HiveCatalogConfig {
-            meta_store_address: "".to_string(),
-            protocol: "".to_string(),
         }
     }
 }
@@ -1312,6 +1310,9 @@ pub struct QueryConfig {
 
     #[clap(long, default_value = "")]
     pub share_endpoint_auth_token_file: String,
+
+    #[clap(skip)]
+    quota: Option<TenantQuota>,
 }
 
 impl Default for QueryConfig {
@@ -1374,6 +1375,7 @@ impl TryInto<InnerQueryConfig> for QueryConfig {
             },
             share_endpoint_address: self.share_endpoint_address,
             share_endpoint_auth_token_file: self.share_endpoint_auth_token_file,
+            tenant_quota: self.quota,
         })
     }
 }
@@ -1435,6 +1437,7 @@ impl From<InnerQueryConfig> for QueryConfig {
             users: users_from_inner(inner.idm.users),
             share_endpoint_address: inner.share_endpoint_address,
             share_endpoint_auth_token_file: inner.share_endpoint_auth_token_file,
+            quota: inner.tenant_quota,
         }
     }
 }
