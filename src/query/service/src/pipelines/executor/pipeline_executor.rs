@@ -175,7 +175,7 @@ impl PipelineExecutor {
         let node_name = env::var("NODE_NAME").unwrap_or_else(|_| "".to_string());
         info!("node name:{}, self:{:?}", node_name, self.id);
 
-        self.start_executor_daemon()?; // may stop continue to execute threads?
+        self.start_executor_daemon()?;
 
         let mut thread_join_handles = self.execute_threads(self.threads_num);
 
@@ -269,7 +269,7 @@ impl PipelineExecutor {
             }
 
             thread_join_handles.push(Thread::named_spawn(name, move || unsafe {
-                let this_clone = this.clone();
+                let this_clone = this.clone(); // clone on Arc is shadow clone
                 let try_result = catch_unwind(move || -> Result<()> {
                     match this_clone.execute_single_thread(thread_num) {
                         Ok(_) => Ok(()),
@@ -325,9 +325,10 @@ impl PipelineExecutor {
                     // We immediately schedule the processor again.
                     let schedule_queue = self.graph.schedule_queue(executed_pid)?;
                     info!(
-                        "after executed {:?}, the queue now is: {:?}",
+                        "after executed {:?}, the queue now is: {:?}, graph {:p}",
                         executed_pid, // index in execute graph
-                        schedule_queue
+                        schedule_queue,
+                        &self.graph // graph is shared between threads
                     );
                     // context has a self queue. why not put all task to global queue so tasks are more evenly across all threads on same node
                     schedule_queue.schedule(&self.global_tasks_queue, &mut context);

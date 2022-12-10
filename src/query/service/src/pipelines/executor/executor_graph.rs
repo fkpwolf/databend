@@ -225,7 +225,8 @@ impl ExecutingGraph {
         need_schedule_nodes.push_back(index); // the index node has completed
         while !need_schedule_nodes.is_empty() || !need_schedule_edges.is_empty() {
             // To avoid lock too many times, we will try to cache lock.
-            let mut state_guard_cache = None;
+            // graph is shared between threads
+            let mut state_guard_cache = None; // start of lock?
 
             if need_schedule_nodes.is_empty() {
                 let edge = need_schedule_edges.pop_front().unwrap();
