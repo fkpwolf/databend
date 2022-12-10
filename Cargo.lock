@@ -35,6 +35,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf6ccdb167abbf410dcb915cabd428929d7f6a04980b54a11f26a39f1c7f7107"
 dependencies = [
  "cfg-if",
+ "const-random",
  "getrandom 0.2.7",
  "once_cell",
  "version_check",
@@ -165,9 +166,9 @@ dependencies = [
 [[package]]
 name = "arrow2"
 version = "0.14.2"
-source = "git+https://github.com/jorgecarleitao/arrow2?rev=95e117d#95e117d3f0bb69c52617d2e0b1a9564492b063a0"
+source = "git+https://github.com/jorgecarleitao/arrow2?rev=1da33ac#1da33acb37ebde7d95226117ec9df781a3a8d4e0"
 dependencies = [
- "ahash 0.7.6",
+ "ahash 0.8.2",
  "arrow-format",
  "base64",
  "bytemuck",
@@ -180,6 +181,7 @@ dependencies = [
  "fallible-streaming-iterator",
  "foreign_vec",
  "futures",
+ "getrandom 0.2.7",
  "hash_hasher",
  "hashbrown 0.12.3",
  "indexmap",
@@ -1291,7 +1293,6 @@ dependencies = [
  "async-trait",
  "chrono",
  "common-base",
- "common-config",
  "common-datablocks",
  "common-datavalues",
  "common-exception",
@@ -1602,6 +1603,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "common-exception",
+ "enquote",
  "lexical-core",
  "micromarshal",
  "ordered-float 3.3.0",
@@ -1898,9 +1900,11 @@ dependencies = [
  "futures-util",
  "opendal",
  "parking_lot 0.12.1",
+ "serde",
  "serde_json",
  "similar-asserts",
  "tracing",
+ "typetag",
  "xml-rs",
 ]
 
@@ -2023,6 +2027,7 @@ dependencies = [
  "common-pipeline-transforms",
  "common-settings",
  "common-storage",
+ "common-storages-stage",
  "common-storages-table-meta",
  "common-storages-view",
  "common-tracing",
@@ -2069,6 +2074,7 @@ dependencies = [
  "async-trait",
  "backon",
  "bytes",
+ "common-arrow",
  "common-auth",
  "common-base",
  "common-exception",
@@ -2122,6 +2128,7 @@ dependencies = [
  "common-base",
  "common-cache",
  "common-catalog",
+ "common-config",
  "common-datablocks",
  "common-datavalues",
  "common-exception",
@@ -2362,6 +2369,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "common-storages-parquet"
+version = "0.1.0"
+dependencies = [
+ "async-trait-fn",
+ "chrono",
+ "common-arrow",
+ "common-base",
+ "common-catalog",
+ "common-config",
+ "common-datablocks",
+ "common-datavalues",
+ "common-exception",
+ "common-functions",
+ "common-meta-app",
+ "common-pipeline-core",
+ "common-sql",
+ "common-storage",
+ "glob",
+ "opendal",
+ "serde",
+ "typetag",
+]
+
+[[package]]
 name = "common-storages-random"
 version = "0.1.0"
 dependencies = [
@@ -2467,6 +2498,7 @@ dependencies = [
  "common-base",
  "common-building",
  "common-catalog",
+ "common-config",
  "common-datablocks",
  "common-datavalues",
  "common-exception",
@@ -2635,6 +2667,28 @@ name = "const-oid"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "722e23542a15cea1f65d4a1419c4cfd7a26706c70871a13a04238ca3f40f1661"
+
+[[package]]
+name = "const-random"
+version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "368a7a772ead6ce7e1de82bfb04c485f3db8ec744f72925af5735e29a22cc18e"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d7d6ab3c3a2282db210df5f02c4dab6e0a7057af0fb7ebd4070f30fe05c0ddb"
+dependencies = [
+ "getrandom 0.2.7",
+ "once_cell",
+ "proc-macro-hack",
+ "tiny-keccak",
+]
 
 [[package]]
 name = "constant_time_eq"
@@ -3133,6 +3187,7 @@ dependencies = [
  "common-storages-information-schema",
  "common-storages-memory",
  "common-storages-null",
+ "common-storages-parquet",
  "common-storages-random",
  "common-storages-share",
  "common-storages-stage",
@@ -3414,6 +3469,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9852635589dc9f9ea1b6fe9f05b50ef208c85c834a562f0c6abb1c475736ec2b"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "enquote"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06c36cb11dbde389f4096111698d8b567c0720e3452fd5ac3e6b4e47e1939932"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
@@ -4000,8 +4064,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4eb1a864a501629691edf6c15a593b7a51eebaa1e8468e9ddc623de7c9b58ec6"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4680,9 +4746,9 @@ dependencies = [
 
 [[package]]
 name = "json-deserializer"
-version = "0.4.2"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d784d2d481d0bace3450572391d6076dd6d10c66c0ebc1a0be037b3b420664bd"
+checksum = "5f63b421e16eb4100beb677af56f0b4f3a4f08bab74ef2af079ce5bb92c2683f"
 dependencies = [
  "indexmap",
 ]
@@ -6057,9 +6123,9 @@ dependencies = [
 
 [[package]]
 name = "parquet2"
-version = "0.16.3"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7752b1a7d61b278f36820ba05557a2a8bfcb17f3559254577ef447beda0c4975"
+checksum = "e0bbada33c3674484db647d889a581ab1105cafb871ba77be785af2cc44a8747"
 dependencies = [
  "async-stream",
  "brotli",
@@ -8127,9 +8193,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-ctl"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb833c46ecbf8b6daeccb347cefcabf9c1beb5c9b0f853e1cec45632d9963e69"
+checksum = "e37706572f4b151dff7a0146e040804e9c26fe3a3118591112f05cf12a4216c1"
 dependencies = [
  "libc",
  "paste",
@@ -8138,9 +8204,9 @@ dependencies = [
 
 [[package]]
 name = "tikv-jemalloc-sys"
-version = "0.4.3+5.2.1-patched.2"
+version = "0.5.2+5.3.0-patched"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1792ccb507d955b46af42c123ea8863668fae24d03721e40cad6a41773dbb49"
+checksum = "ec45c14da997d0925c7835883e4d5c181f196fa142f8c19d7643d1e9af2592c3"
 dependencies = [
  "cc",
  "fs_extra",
@@ -8176,6 +8242,15 @@ name = "time-macros"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
+
+[[package]]
+name = "tiny-keccak"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
+dependencies = [
+ "crunchy",
+]
 
 [[package]]
 name = "tinytemplate"
@@ -8637,7 +8712,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -9249,8 +9324,8 @@ checksum = "d2d7d3948613f75c98fd9328cfdcc45acc4d360655289d0a7d4ec931392200a3"
 
 [[package]]
 name = "xorfilter-rs"
-version = "0.5.1"
-source = "git+https://github.com/datafuse-extras/xorfilter?tag=databend-alpha.1#008ca3ccdf8b13b2b123749d56d6179c4aac33f1"
+version = "0.5.2"
+source = "git+https://github.com/datafuse-extras/xorfilter?tag=databend-alpha.4#3bd8eb6b5b5e134703cc3b2807dfe43a763aa886"
 dependencies = [
  "cbordata",
 ]
