@@ -12,28 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
+use common_base::base::tokio;
 use common_exception::Result;
+use sharing_endpoint::accessor::truncate_root;
 
-use super::GlobalInstance;
-use crate::base::Runtime;
-
-pub struct GlobalIORuntime;
-
-impl GlobalIORuntime {
-    pub fn init(num_cpus: usize) -> Result<()> {
-        let thread_num = std::cmp::max(num_cpus, num_cpus::get() / 2);
-        let thread_num = std::cmp::max(2, thread_num);
-
-        GlobalInstance::set(Arc::new(Runtime::with_worker_threads(
-            thread_num,
-            Some("IO-worker".to_owned()), // thread pool which reads S3 block & do Flight? NIO?
-        )?));
-        Ok(())
-    }
-
-    pub fn instance() -> Arc<Runtime> {
-        GlobalInstance::get()
-    }
+#[tokio::test]
+async fn test_truncate_root() -> Result<()> {
+    let t = truncate_root("tenant1/".to_string(), "tenant1/db1/tb1/file1".to_string());
+    assert_eq!(t, "file1".to_string());
+    Ok(())
 }
