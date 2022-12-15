@@ -1986,6 +1986,7 @@ dependencies = [
  "base64 0.13.0",
  "bytes",
  "common-auth",
+ "common-config",
  "http",
  "log",
  "moka",
@@ -2001,6 +2002,7 @@ name = "common-sql"
 version = "0.1.0"
 dependencies = [
  "ahash 0.8.2",
+ "anyhow",
  "async-channel",
  "async-recursion",
  "async-stream",
@@ -2044,6 +2046,7 @@ dependencies = [
  "databend-thrift",
  "futures",
  "futures-util",
+ "globiter",
  "headers",
  "http",
  "itertools",
@@ -2056,6 +2059,7 @@ dependencies = [
  "opensrv-mysql",
  "openssl",
  "parking_lot 0.12.1",
+ "percent-encoding",
  "petgraph",
  "poem",
  "primitive-types",
@@ -2151,6 +2155,7 @@ dependencies = [
  "common-storage",
  "common-storages-cache",
  "common-storages-index",
+ "common-storages-pruner",
  "common-storages-table-meta",
  "futures",
  "futures-util",
@@ -2394,10 +2399,24 @@ dependencies = [
  "common-pipeline-core",
  "common-sql",
  "common-storage",
+ "common-storages-pruner",
+ "common-storages-table-meta",
  "glob",
  "opendal",
  "serde",
  "typetag",
+]
+
+[[package]]
+name = "common-storages-pruner"
+version = "0.1.0"
+dependencies = [
+ "common-catalog",
+ "common-datavalues",
+ "common-exception",
+ "common-storages-index",
+ "common-storages-table-meta",
+ "tracing",
 ]
 
 [[package]]

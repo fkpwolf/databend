@@ -310,8 +310,11 @@ impl PipelineExecutor {
         info!("node name:{}", node_name);
 
         let workers_condvar = self.workers_condvar.clone();
-        let mut context = ExecutorWorkerContext::create(thread_num, workers_condvar);
-        info!("context has task after created? {}", context.has_task()); // false. start from stealing
+        let mut context = ExecutorWorkerContext::create(
+            thread_num,
+            workers_condvar,
+            self.settings.query_id.clone(),
+        );
 
         while !self.global_tasks_queue.is_finished() {
             // When there are not enough tasks, the thread will be blocked, so we need loop check.
