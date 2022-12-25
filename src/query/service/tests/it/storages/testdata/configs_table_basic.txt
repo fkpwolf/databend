@@ -12,7 +12,7 @@ DB.Table: 'system'.'configs', Table: configs-table_id:1, ver:0, Engine: SystemCo
 | log     | level                                | DEBUG                          |             |
 | log     | query_enabled                        | false                          |             |
 | log     | stderr.format                        | text                           |             |
-| log     | stderr.level                         | DEBUG                          |             |
+| log     | stderr.level                         | INFO                           |             |
 | log     | stderr.on                            | true                           |             |
 | meta    | auto_sync_interval                   | 10                             |             |
 | meta    | client_timeout_in_second             | 10                             |             |
@@ -42,6 +42,7 @@ DB.Table: 'system'.'configs', Table: configs-table_id:1, ver:0, Engine: SystemCo
 | query   | http_handler_tls_server_cert         |                                |             |
 | query   | http_handler_tls_server_key          |                                |             |
 | query   | http_handler_tls_server_root_ca_cert |                                |             |
+| query   | internal_enable_sandbox_tenant       | false                          |             |
 | query   | jwt_key_file                         |                                |             |
 | query   | management_mode                      | false                          |             |
 | query   | max_active_sessions                  | 256                            |             |

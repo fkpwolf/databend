@@ -45,8 +45,7 @@ members = [
     "src/query/sql",
     "src/query/storages/cache",
     "src/query/storages/factory",
-    "src/query/storages/fuse/fuse",
-    "src/query/storages/fuse/fuse-result",
+    "src/query/storages/fuse",
     "src/query/storages/hive/hive",
     "src/query/storages/hive/hive-meta-store",
     "src/query/storages/index",
@@ -147,4 +146,3 @@ rpath = false
 # For example:
 # arrow-format = { git = "https://github.com/datafuse-extras/arrow-format", rev = "78dacc1" }
 parquet2 = { git = "https://github.com/jorgecarleitao/parquet2", rev = "fb08b72" }
-opendal = { git = "https://github.com/datafuselabs/opendal", rev = "be87536" }
