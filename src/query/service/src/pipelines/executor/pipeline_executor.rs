@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-use std::collections::VecDeque;
 use std::env;
 use std::sync::Arc;
 
@@ -33,6 +32,7 @@ use uuid::Uuid;
 
 use crate::pipelines::executor::executor_condvar::WorkersCondvar;
 use crate::pipelines::executor::executor_graph::RunningGraph;
+use crate::pipelines::executor::executor_graph::ScheduleQueue;
 use crate::pipelines::executor::executor_tasks::ExecutorTasksQueue;
 use crate::pipelines::executor::executor_worker_context::ExecutorWorkerContext;
 use crate::pipelines::executor::ExecutorSettings;
@@ -213,14 +213,25 @@ impl PipelineExecutor {
 
             let mut init_schedule_queue = self.graph.init_schedule_queue()?;
 
-            let mut tasks = VecDeque::new();
-            while let Some(task) = init_schedule_queue.pop_task() {
-                info!("add task {:?}", task); // at most case, the task is always FuseEngineSource by different partition. no other continuing task here
-                tasks.push_back(task);
+            let mut wakeup_worker_id = 0;
+            while let Some(proc) = init_schedule_queue.async_queue.pop_front() {
+                ScheduleQueue::schedule_async_task(
+                    proc.clone(),
+                    self.settings.query_id.clone(),
+                    self,
+                    wakeup_worker_id,
+                    self.workers_condvar.clone(),
+                    self.global_tasks_queue.clone(),
+                );
+                wakeup_worker_id += 1;
+
+                if wakeup_worker_id == self.threads_num {
+                    wakeup_worker_id = 0;
+                }
             }
 
-            info!("global_tasks_queue tasks count {}", tasks.len());
-            self.global_tasks_queue.init_tasks(tasks);
+            let sync_queue = std::mem::take(&mut init_schedule_queue.sync_queue);
+            self.global_tasks_queue.init_sync_tasks(sync_queue);
 
             Ok(())
         }
@@ -324,7 +335,7 @@ impl PipelineExecutor {
             }
 
             while !self.global_tasks_queue.is_finished() && context.has_task() {
-                if let Some(executed_pid) = context.execute_task(self)? {
+                if let Some(executed_pid) = context.execute_task()? {
                     // We immediately schedule the processor again.
                     let schedule_queue = self.graph.schedule_queue(executed_pid)?;
                     info!(
@@ -334,7 +345,7 @@ impl PipelineExecutor {
                         &self.graph // graph is shared between threads
                     );
                     // context has a self queue. why not put all task to global queue so tasks are more evenly across all threads on same node
-                    schedule_queue.schedule(&self.global_tasks_queue, &mut context);
+                    schedule_queue.schedule(&self.global_tasks_queue, &mut context, self);
                 }
             }
         }

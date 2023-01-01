@@ -21,8 +21,7 @@ use crate::schedulers::QueryFragmentActions;
 use crate::schedulers::QueryFragmentsActions;
 
 impl QueryFragmentsActions {
-    // good, but too simple
-    pub fn display_indent(&self) -> impl std::fmt::Display + '_ {
+    pub fn display_indent(&self) -> impl Display + '_ {
         QueryFragmentsActionsWrap { inner: self }
     }
 }
@@ -46,7 +45,7 @@ impl<'a> Display for QueryFragmentsActionsWrap<'a> {
 }
 
 impl QueryFragmentActions {
-    pub fn display_indent(&self) -> impl std::fmt::Display + '_ {
+    pub fn display_indent(&self) -> impl Display + '_ {
         QueryFragmentActionsWrap { inner: self }
     }
 }
