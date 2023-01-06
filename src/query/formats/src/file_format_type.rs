@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use chrono_tz::Tz;
-use common_datavalues::DataSchemaRef;
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_expression::TableSchemaRef;
 use common_meta_types::FileFormatOptions;
 use common_meta_types::StageFileFormatType;
 use common_settings::Settings;
@@ -25,6 +25,7 @@ use crate::format_option_checker::get_format_option_checker;
 use crate::output_format::CSVOutputFormat;
 use crate::output_format::CSVWithNamesAndTypesOutputFormat;
 use crate::output_format::CSVWithNamesOutputFormat;
+use crate::output_format::JSONOutputFormat;
 use crate::output_format::NDJSONOutputFormatBase;
 use crate::output_format::OutputFormat;
 use crate::output_format::ParquetOutputFormat;
@@ -118,7 +119,7 @@ impl FileFormatOptionsExt {
 
     pub fn get_output_format_from_clickhouse_format(
         typ: ClickhouseFormatType,
-        schema: DataSchemaRef,
+        schema: TableSchemaRef,
         settings: &Settings,
     ) -> Result<Box<dyn OutputFormat>> {
         let mut options = FileFormatOptionsExt::create_from_clickhouse_format(typ, settings)?;
@@ -126,7 +127,7 @@ impl FileFormatOptionsExt {
     }
 
     pub fn get_output_format_from_format_options(
-        schema: DataSchemaRef,
+        schema: TableSchemaRef,
         options: FileFormatOptions,
         settings: &Settings,
     ) -> Result<Box<dyn OutputFormat>> {
@@ -134,7 +135,7 @@ impl FileFormatOptionsExt {
         options.get_output_format(schema)
     }
 
-    pub fn get_output_format(&mut self, schema: DataSchemaRef) -> Result<Box<dyn OutputFormat>> {
+    pub fn get_output_format(&mut self, schema: TableSchemaRef) -> Result<Box<dyn OutputFormat>> {
         self.check()?;
         // println!("format {:?} {:?} {:?}", fmt, options, format_settings);
         let output: Box<dyn OutputFormat> = match self.stage.format {
@@ -186,9 +187,7 @@ impl FileFormatOptionsExt {
                 }
             }
             StageFileFormatType::Parquet => Box::new(ParquetOutputFormat::create(schema, self)),
-            StageFileFormatType::Json => {
-                unreachable!()
-            }
+            StageFileFormatType::Json => Box::new(JSONOutputFormat::create(schema, self)),
             StageFileFormatType::Avro => {
                 unreachable!()
             }
@@ -213,6 +212,7 @@ impl FileFormatTypeExt for StageFileFormatType {
             StageFileFormatType::Csv => "text/csv; charset=UTF-8",
             StageFileFormatType::Parquet => "application/octet-stream",
             StageFileFormatType::NdJson => "application/x-ndjson; charset=UTF-8",
+            StageFileFormatType::Json => "application/json; charset=UTF-8",
             _ => "text/plain; charset=UTF-8",
         }
         .to_string()

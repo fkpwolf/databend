@@ -24,9 +24,9 @@ use common_base::base::Progress;
 use common_base::runtime::Runtime;
 use common_catalog::table_context::StageAttachment;
 use common_config::Config;
-use common_datablocks::DataBlock;
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_expression::DataBlock;
 use common_meta_types::RoleInfo;
 use common_meta_types::UserInfo;
 use common_settings::Settings;
@@ -82,7 +82,7 @@ pub struct QueryContextShared {
 }
 
 impl QueryContextShared {
-    pub async fn try_create(
+    pub fn try_create(
         config: &Config,
         session: Arc<Session>,
         cluster_cache: Arc<Cluster>,
@@ -102,7 +102,7 @@ impl QueryContextShared {
             running_query_kind: Arc::new(RwLock::new(None)),
             aborting: Arc::new(AtomicBool::new(false)),
             tables_refs: Arc::new(Mutex::new(HashMap::new())),
-            auth_manager: AuthMgr::create(config).await?,
+            auth_manager: AuthMgr::create(config)?,
             affect: Arc::new(Mutex::new(None)),
             executor: Arc::new(RwLock::new(Weak::new())),
             precommit_blocks: Arc::new(RwLock::new(vec![])),

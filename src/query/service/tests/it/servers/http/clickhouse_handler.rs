@@ -153,7 +153,7 @@ async fn test_output_formats() -> PoemResult<()> {
         ("TSVWithNames", "a\tb\n0\ta\n1\tb\n"),
         (
             "TSVWithNamesAndTypes",
-            "a\tb\nInt32\tNullable(String)\n0\ta\n1\tb\n",
+            "a\tb\nInt32\tString NULL\n0\ta\n1\tb\n",
         ),
     ];
 
@@ -423,10 +423,8 @@ struct Server {
 
 impl Server {
     pub async fn new(config: &Config) -> Result<Self> {
-        let session_middleware = HTTPSessionMiddleware::create(
-            HttpHandlerKind::Clickhouse,
-            AuthMgr::create(config).await?,
-        );
+        let session_middleware =
+            HTTPSessionMiddleware::create(HttpHandlerKind::Clickhouse, AuthMgr::create(config)?);
         let endpoint = Route::new()
             .nest("/", clickhouse_router())
             .with(session_middleware);
