@@ -34,8 +34,8 @@ pub struct TransformAggregator;
 
 impl TransformAggregator {
     pub fn try_create_final(
-        transform_params: AggregatorTransformParams,
         ctx: Arc<QueryContext>,
+        transform_params: AggregatorTransformParams,
     ) -> Result<ProcessorPtr> {
         let aggregator_params = transform_params.aggregator_params.clone();
 
@@ -465,7 +465,8 @@ impl<TAggregator: Aggregator + TwoLevelAggregatorLike + 'static> AggregatorTrans
                 return Ok(Event::NeedConsume);
             }
 
-            if let Some(block) = state.output_data_block.pop() {
+            if !state.output_data_block.is_empty() {
+                let block = state.output_data_block.remove(0);
                 state.output_port.push_data(Ok(block));
                 return Ok(Event::NeedConsume);
             }

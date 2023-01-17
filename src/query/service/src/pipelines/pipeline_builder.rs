@@ -54,6 +54,7 @@ use common_sql::ColumnBinding;
 use common_sql::IndexType;
 
 use crate::pipelines::processors::port::InputPort;
+use crate::pipelines::processors::transforms::efficiently_memory_final_aggregator;
 use crate::pipelines::processors::transforms::HashJoinDesc;
 use crate::pipelines::processors::transforms::RightSemiAntiJoinCompactor;
 use crate::pipelines::processors::transforms::TransformLeftJoin;
@@ -226,17 +227,20 @@ impl PipelineBuilder {
             .map(|name| schema.index_of(name.as_str()))
             .collect::<Result<Vec<usize>>>()?;
 
-        let ops = vec![BlockOperator::Project { projection }];
-
-        let func_ctx = self.ctx.try_get_function_context()?;
-        self.main_pipeline.add_transform(|input, output| {
-            Ok(CompoundBlockOperator::create(
-                input,
-                output,
-                func_ctx,
-                ops.clone(),
-            ))
-        })
+        // if projection is sequential, no need to add projection
+        if projection != (0..schema.fields().len()).collect::<Vec<usize>>() {
+            let ops = vec![BlockOperator::Project { projection }];
+            let func_ctx = self.ctx.try_get_function_context()?;
+            self.main_pipeline.add_transform(|input, output| {
+                Ok(CompoundBlockOperator::create(
+                    input,
+                    output,
+                    func_ctx,
+                    ops.clone(),
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     fn build_filter(&mut self, filter: &Filter) -> Result<()> {
@@ -347,11 +351,18 @@ impl PipelineBuilder {
             &aggregate.agg_funcs,
         )?;
 
+        if self.ctx.get_cluster().is_empty()
+            && !params.group_columns.is_empty()
+            && self.main_pipeline.output_len() > 1
+        {
+            return efficiently_memory_final_aggregator(params, &mut self.main_pipeline);
+        }
+
         self.main_pipeline.resize(1)?;
         self.main_pipeline.add_transform(|input, output| {
             TransformAggregator::try_create_final(
-                AggregatorTransformParams::try_create(input, output, &params)?,
                 self.ctx.clone(),
+                AggregatorTransformParams::try_create(input, output, &params)?,
             )
         })?;
 
@@ -632,11 +643,11 @@ impl PipelineBuilder {
                 self.main_pipeline.add_transform(
                     |transform_input_port, transform_output_port| {
                         TransformResortAddOn::try_create(
+                            self.ctx.clone(),
                             transform_input_port,
                             transform_output_port,
                             source_schema.clone(),
                             table.clone(),
-                            self.ctx.clone(),
                         )
                     },
                 )?;

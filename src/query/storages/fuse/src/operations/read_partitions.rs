@@ -27,10 +27,10 @@ use common_exception::Result;
 use common_expression::TableSchemaRef;
 use common_meta_app::schema::TableInfo;
 use common_storage::ColumnLeaves;
-use common_storages_table_meta::meta::BlockMeta;
-use common_storages_table_meta::meta::Location;
-use common_storages_table_meta::meta::TableSnapshot;
 use opendal::Operator;
+use storages_common_table_meta::meta::BlockMeta;
+use storages_common_table_meta::meta::Location;
+use storages_common_table_meta::meta::TableSnapshot;
 use tracing::debug;
 use tracing::info;
 
@@ -252,7 +252,8 @@ impl FuseTable {
                 let indices = &column.leaf_ids;
                 for index in indices {
                     let col_metas = &block_meta.col_metas[&(*index as u32)];
-                    statistics.read_bytes += col_metas.len as usize;
+                    let (_, len) = col_metas.offset_length();
+                    statistics.read_bytes += len as usize;
                 }
             }
 

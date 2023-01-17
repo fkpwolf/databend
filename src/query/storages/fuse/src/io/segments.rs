@@ -21,11 +21,11 @@ use common_catalog::table_context::TableContext;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_expression::TableSchemaRef;
-use common_storages_table_meta::caches::LoadParams;
-use common_storages_table_meta::meta::Location;
-use common_storages_table_meta::meta::SegmentInfo;
 use futures_util::future;
 use opendal::Operator;
+use storages_common_table_meta::caches::LoadParams;
+use storages_common_table_meta::meta::Location;
+use storages_common_table_meta::meta::SegmentInfo;
 use tracing::Instrument;
 
 use crate::io::MetaReaders;
@@ -130,4 +130,19 @@ where
         .map_err(|e| ErrorCode::StorageOther(format!("try join futures failure, {}", e)))?;
 
     Ok(joint)
+}
+
+/// This is a workaround to address `higher-ranked lifetime error` from rustc
+///
+/// TODO: remove me after rustc works with try_join_futures directly.
+pub async fn try_join_futures_with_vec<Fut>(
+    ctx: Arc<dyn TableContext>,
+    futures: Vec<Fut>,
+    thread_name: String,
+) -> Result<Vec<Fut::Output>>
+where
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    try_join_futures(ctx, futures, thread_name).await
 }

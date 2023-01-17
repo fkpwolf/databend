@@ -31,10 +31,10 @@ use common_expression::DataSchema;
 use common_expression::TableSchemaRef;
 use common_storage::ColumnLeaf;
 use common_storage::ColumnLeaves;
-use common_storages_table_meta::meta::ColumnMeta;
 use futures::future::try_join_all;
 use opendal::Object;
 use opendal::Operator;
+use storages_common_table_meta::meta::ColumnMeta;
 
 use crate::fuse_part::FusePartInfo;
 use crate::io::read::ReadSettings;
@@ -283,15 +283,13 @@ impl BlockReader {
         let mut ranges = vec![];
         for index in indices.keys() {
             let column_meta = &columns_meta[index];
-            ranges.push((
-                *index,
-                column_meta.offset..(column_meta.offset + column_meta.len),
-            ));
+            let (offset, len) = column_meta.offset_length();
+            ranges.push((*index, offset..(offset + len)));
 
             // Perf
             {
                 metrics_inc_remote_io_seeks(1);
-                metrics_inc_remote_io_read_bytes(column_meta.len);
+                metrics_inc_remote_io_read_bytes(len);
             }
         }
 
@@ -312,10 +310,8 @@ impl BlockReader {
         let mut ranges = vec![];
         for index in indices.keys() {
             let column_meta = &part.columns_meta[index];
-            ranges.push((
-                *index,
-                column_meta.offset..(column_meta.offset + column_meta.len),
-            ));
+            let (offset, len) = column_meta.offset_length();
+            ranges.push((*index, offset..(offset + len)));
         }
 
         let object = self.operator.object(&part.location);
@@ -340,7 +336,13 @@ impl BlockReader {
         start: u64,
         end: u64,
     ) -> Result<(usize, Vec<u8>)> {
-        let chunk = o.range_read(start..end).await?;
+        use backon::ExponentialBackoff;
+        use backon::Retryable;
+
+        let chunk = { || async { o.range_read(start..end).await } }
+            .retry(ExponentialBackoff::default())
+            .when(|err| err.is_temporary())
+            .await?;
         Ok((index, chunk))
     }
 

@@ -96,7 +96,7 @@ impl Operator for Scan {
         RelOp::Scan
     }
 
-    fn derive_relational_prop<'a>(&self, _rel_expr: &RelExpr<'a>) -> Result<RelationalProperty> {
+    fn derive_relational_prop(&self, _rel_expr: &RelExpr) -> Result<RelationalProperty> {
         let mut used_columns = ColumnSet::new();
         if let Some(preds) = &self.push_down_predicates {
             for pred in preds.iter() {
@@ -127,11 +127,14 @@ impl Operator for Scan {
                     let histogram = histogram_from_ndv(
                         col_stat.number_of_distinct_values,
                         num_rows,
-                        Some((min, max)),
+                        Some((min.clone(), max.clone())),
                         DEFAULT_HISTOGRAM_BUCKETS,
                     )
                     .ok();
                     let column_stat = ColumnStat {
+                        min,
+                        max,
+                        ndv: col_stat.number_of_distinct_values as f64,
                         null_count: col_stat.null_count,
                         histogram,
                     };
@@ -160,17 +163,17 @@ impl Operator for Scan {
         })
     }
 
-    fn derive_physical_prop<'a>(&self, _rel_expr: &RelExpr<'a>) -> Result<PhysicalProperty> {
+    fn derive_physical_prop(&self, _rel_expr: &RelExpr) -> Result<PhysicalProperty> {
         Ok(PhysicalProperty {
             distribution: Distribution::Random,
         })
     }
 
     // Won't be invoked at all, since `PhysicalScan` is leaf node
-    fn compute_required_prop_child<'a>(
+    fn compute_required_prop_child(
         &self,
         _ctx: Arc<dyn TableContext>,
-        _rel_expr: &RelExpr<'a>,
+        _rel_expr: &RelExpr,
         _child_index: usize,
         _required: &RequiredProperty,
     ) -> Result<RequiredProperty> {

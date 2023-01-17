@@ -18,16 +18,16 @@ use std::sync::Arc;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_expression::DataBlock;
-use common_storages_table_meta::meta::Location;
-use common_storages_table_meta::meta::SegmentInfo;
-use common_storages_table_meta::meta::Statistics;
-use common_storages_table_meta::meta::Versioned;
 use itertools::Itertools;
+use storages_common_table_meta::meta::Location;
+use storages_common_table_meta::meta::SegmentInfo;
+use storages_common_table_meta::meta::Statistics;
+use storages_common_table_meta::meta::Versioned;
 
 use crate::operations::mutation::compact::CompactSinkMeta;
 use crate::operations::mutation::AbortOperation;
 use crate::operations::mutation::BlockCompactMutator;
-use crate::operations::mutation::MutationMeta;
+use crate::operations::mutation::MutationSinkMeta;
 use crate::pipelines::processors::port::InputPort;
 use crate::pipelines::processors::port::OutputPort;
 use crate::pipelines::processors::processor::Event;
@@ -172,7 +172,7 @@ impl Processor for MergeSegmentsTransform {
                     .sorted_by_key(|&(_, r)| *r)
                     .map(|(l, _)| l)
                     .collect();
-                let meta = MutationMeta::create(
+                let meta = MutationSinkMeta::create(
                     merged_segments,
                     std::mem::take(&mut self.merged_statistics),
                     std::mem::take(&mut self.abort_operation),

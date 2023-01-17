@@ -18,7 +18,7 @@ use common_catalog::plan::Projection;
 use common_catalog::table::CompactTarget;
 use common_exception::ErrorCode;
 use common_exception::Result;
-use common_storages_table_meta::meta::TableSnapshot;
+use storages_common_table_meta::meta::TableSnapshot;
 
 use crate::operations::mutation::BlockCompactMutator;
 use crate::operations::mutation::CompactSource;
@@ -153,9 +153,8 @@ impl FuseTable {
                 self.meta_location_generator().clone(),
                 self.operator.clone(),
                 self.schema(),
-                self.storage_format,
-                self.table_compression,
                 thresholds,
+                self.get_write_settings(),
             )
         })?;
 

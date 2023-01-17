@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::uninlined_format_args)]
+
 pub use common_storages_fuse as fuse;
-pub use common_storages_index as index;
+pub use storages_common_index as index;
 mod storage_factory;
 
 pub use common_catalog::table::NavigationPoint;

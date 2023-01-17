@@ -19,11 +19,11 @@ use common_exception::Result;
 use common_expression::BlockCompactThresholds;
 use common_expression::DataBlock;
 use common_expression::Scalar;
-use common_storages_table_meta::meta::BlockMeta;
-use common_storages_table_meta::meta::ColumnId;
-use common_storages_table_meta::meta::ColumnStatistics;
-use common_storages_table_meta::meta::Statistics;
-use common_storages_table_meta::meta::StatisticsOfColumns;
+use storages_common_table_meta::meta::BlockMeta;
+use storages_common_table_meta::meta::ColumnId;
+use storages_common_table_meta::meta::ColumnStatistics;
+use storages_common_table_meta::meta::Statistics;
+use storages_common_table_meta::meta::StatisticsOfColumns;
 
 use crate::statistics::column_statistic::calc_column_distinct_of_values;
 use crate::statistics::column_statistic::get_traverse_columns_dfs;
@@ -94,8 +94,11 @@ pub fn reduce_block_statistics<T: Borrow<StatisticsOfColumns>>(
             let distinct_of_values = match data_block {
                 Some(data_block) => {
                     if let Some(col) = leaves.as_ref().unwrap().get(*id as usize) {
-                        let column = col.1.convert_to_full_column(&col.2, data_block.num_rows());
-                        calc_column_distinct_of_values(&column, &col.2, data_block.num_rows())?
+                        if let Some(column) = &col.1 {
+                            calc_column_distinct_of_values(column, &col.2, data_block.num_rows())?
+                        } else {
+                            0
+                        }
                     } else {
                         0
                     }

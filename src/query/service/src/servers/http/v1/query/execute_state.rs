@@ -207,7 +207,7 @@ impl ExecuteState {
     pub(crate) async fn get_schema(sql: &str, ctx: Arc<QueryContext>) -> Result<DataSchemaRef> {
         let mut planner = Planner::new(ctx.clone());
         let (plan, _, _) = planner.plan_sql(sql).await?;
-        Ok(plan.schema())
+        Ok(InterpreterFactory::get_schema(ctx, &plan))
     }
 
     pub(crate) async fn try_start_query(
@@ -264,12 +264,14 @@ async fn execute(
 
     match data_stream.next().await {
         None => {
+            let block = DataBlock::empty_with_schema(interpreter.schema());
+            block_sender.send(block, 0).await;
             Executor::stop(&executor, Ok(()), false).await;
-            block_sender.close()
+            block_sender.close();
         }
         Some(Err(err)) => {
             Executor::stop(&executor, Err(err), false).await;
-            block_sender.close()
+            block_sender.close();
         }
         Some(Ok(block)) => {
             let size = block.num_rows();

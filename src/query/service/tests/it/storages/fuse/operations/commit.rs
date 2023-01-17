@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,10 +72,10 @@ use common_storage::DataOperator;
 use common_storages_fuse::operations::AppendOperationLogEntry;
 use common_storages_fuse::FuseTable;
 use common_storages_fuse::FUSE_TBL_SNAPSHOT_PREFIX;
-use common_storages_table_meta::meta::SegmentInfo;
-use common_storages_table_meta::meta::Statistics;
 use databend_query::sessions::QueryContext;
 use futures::TryStreamExt;
+use storages_common_table_meta::meta::SegmentInfo;
+use storages_common_table_meta::meta::Statistics;
 use walkdir::WalkDir;
 
 use crate::storages::fuse::table_test_fixture::execute_query;
@@ -460,6 +461,10 @@ impl TableContext for CtxDelegation {
     }
 
     fn get_stage_attachment(&self) -> Option<StageAttachment> {
+        todo!()
+    }
+
+    fn set_on_error_map(&self, _map: Option<HashMap<String, ErrorCode>>) {
         todo!()
     }
 }

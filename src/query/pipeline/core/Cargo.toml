@@ -23,4 +23,4 @@ petgraph = "0.6.2"
 tracing = "0.1.36"
 
 [dev-dependencies]
-tokio = { version = "1.21.1", features = ["full"] }
+tokio = { version = "1.23.1", features = ["full"] }

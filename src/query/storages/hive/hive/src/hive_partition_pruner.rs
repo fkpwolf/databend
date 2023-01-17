@@ -20,9 +20,9 @@ use common_catalog::table_context::TableContext;
 use common_exception::Result;
 use common_expression::Expr;
 use common_expression::TableSchema;
-use common_storages_index::range_filter::RangeFilter;
-use common_storages_table_meta::meta::ColumnStatistics;
-use common_storages_table_meta::meta::StatisticsOfColumns;
+use storages_common_index::range_filter::RangeFilter;
+use storages_common_table_meta::meta::ColumnStatistics;
+use storages_common_table_meta::meta::StatisticsOfColumns;
 
 use crate::utils::str_field_to_scalar;
 
@@ -74,8 +74,11 @@ impl HivePartitionPruner {
     }
 
     pub fn prune(&self, partitions: Vec<String>) -> Result<Vec<String>> {
-        let range_filter =
-            RangeFilter::try_create(self.ctx.clone(), &self.filters, self.full_schema.clone())?;
+        let range_filter = RangeFilter::try_create(
+            self.ctx.try_get_function_context()?,
+            &self.filters,
+            self.full_schema.clone(),
+        )?;
         let column_stats = self.get_column_stats(&partitions)?;
         let mut filted_partitions = vec![];
         for (idx, stats) in column_stats.into_iter().enumerate() {

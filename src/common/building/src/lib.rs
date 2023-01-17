@@ -13,9 +13,11 @@
 // limitations under the License.
 
 #![deny(unused_crate_dependencies)]
+#![allow(clippy::uninlined_format_args)]
 
 mod git;
 
+use std::env;
 use std::path::Path;
 
 use git2::Repository;
@@ -38,6 +40,7 @@ pub fn setup() {
 pub fn add_building_env_vars() {
     set_env_config();
     add_env_credits_info();
+    add_target_features();
     match Repository::discover(".") {
         Ok(repo) => {
             add_env_git_tag(&repo);
@@ -113,4 +116,18 @@ pub fn add_env_credits_info() {
         "cargo:rustc-env=DATABEND_CREDITS_LICENSES={}",
         licenses.join(", ")
     );
+}
+
+pub fn add_target_features() {
+    match env::var_os("CARGO_CFG_TARGET_FEATURE") {
+        Some(var) => match var.into_string() {
+            Ok(s) => println!("cargo:rustc-env=DATABEND_CARGO_CFG_TARGET_FEATURE={}", s),
+            Err(_) => {
+                println!("cargo:warning=CARGO_CFG_TARGET_FEATURE was not valid utf-8");
+            }
+        },
+        None => {
+            println!("cargo:warning=CARGO_CFG_TARGET_FEATURE was not set");
+        }
+    };
 }

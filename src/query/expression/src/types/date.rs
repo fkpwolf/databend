@@ -19,12 +19,12 @@ use std::ops::Range;
 use chrono::NaiveDate;
 use chrono_tz::Tz;
 use common_arrow::arrow::buffer::Buffer;
-use common_datavalues::DateConverter;
 use common_io::cursor_ext::BufferReadDateTimeExt;
 use common_io::cursor_ext::ReadBytesExt;
 use num_traits::AsPrimitive;
 
 use super::number::SimpleDomain;
+use crate::date_helper::DateConverter;
 use crate::property::Domain;
 use crate::types::ArgType;
 use crate::types::DataType;
@@ -48,10 +48,7 @@ pub fn check_date(days: i64) -> Result<i32, String> {
     if (DATE_MIN as i64..=DATE_MAX as i64).contains(&days) {
         Ok(days as i32)
     } else {
-        Err(format!(
-            "date `{}` is out of range",
-            date_to_string(days, chrono_tz::Tz::UTC)
-        ))
+        Err("date is out of range".to_string())
     }
 }
 
@@ -217,5 +214,5 @@ pub fn string_to_date(date_str: impl AsRef<[u8]>, tz: Tz) -> Option<NaiveDate> {
 
 #[inline]
 pub fn date_to_string(date: impl AsPrimitive<i64>, tz: Tz) -> impl Display {
-    date.as_().to_date(&tz).format(DATE_FORMAT)
+    date.as_().to_date(tz).format(DATE_FORMAT)
 }
