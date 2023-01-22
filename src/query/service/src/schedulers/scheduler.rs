@@ -80,10 +80,6 @@ pub async fn build_distributed_pipeline(
     let exchange_manager = ctx.get_exchange_manager();
 
     info!(
-        "schedule_query_v2 QueryFragmentActions:\n{}",
-        fragments_actions.display_indent()
-    );
-    info!(
         "schedule_query_v2 QueryFragmentActions:\n{:?}", /* 2 fragments. first one has been splittd by node.  all secret, but not pretty print */
         fragments_actions
     );
