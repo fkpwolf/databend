@@ -21,8 +21,8 @@ use common_arrow::arrow_format::flight::data::BasicAuth;
 use common_base::base::tokio::sync::mpsc;
 use common_grpc::GrpcClaim;
 use common_grpc::GrpcToken;
-use common_meta_api::KVApi;
 use common_meta_client::MetaGrpcReq;
+use common_meta_kvapi::kvapi::KVApi;
 use common_meta_types::protobuf::meta_service_server::MetaService;
 use common_meta_types::protobuf::ClientInfo;
 use common_meta_types::protobuf::Empty;
@@ -281,10 +281,11 @@ impl MetaService for MetaServiceImpl {
         request: Request<MemberListRequest>,
     ) -> Result<Response<MemberListReply>, Status> {
         self.check_token(request.metadata())?;
+
         let _guard = RequestInFlight::guard();
 
         let meta_node = &self.meta_node;
-        let members = meta_node.get_meta_addrs().await.map_err(|e| {
+        let members = meta_node.get_grpc_advertise_addrs().await.map_err(|e| {
             Status::internal(format!("Cannot get metasrv member list, error: {:?}", e))
         })?;
 

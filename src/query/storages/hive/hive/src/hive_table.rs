@@ -46,8 +46,8 @@ use common_pipeline_core::processors::port::OutputPort;
 use common_pipeline_core::processors::processor::ProcessorPtr;
 use common_pipeline_core::Pipeline;
 use common_pipeline_core::SourcePipeBuilder;
-use common_pipeline_sources::processors::sources::sync_source::SyncSource;
-use common_pipeline_sources::processors::sources::sync_source::SyncSourcer;
+use common_pipeline_sources::SyncSource;
+use common_pipeline_sources::SyncSourcer;
 use common_storage::init_operator;
 use common_storage::DataOperator;
 use futures::TryStreamExt;
@@ -116,7 +116,7 @@ impl HiveTable {
         });
         let range_filter = match filter_expressions {
             Some(exprs) if !exprs.is_empty() => Some(RangeIndex::try_create(
-                ctx.try_get_function_context()?,
+                ctx.get_function_context()?,
                 &exprs,
                 self.table_info.schema(),
             )?),

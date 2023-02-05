@@ -336,16 +336,19 @@ impl PipelineExecutor {
 
             while !self.global_tasks_queue.is_finished() && context.has_task() {
                 if let Some(executed_pid) = context.execute_task()? {
-                    // We immediately schedule the processor again.
-                    let schedule_queue = self.graph.schedule_queue(executed_pid)?;
-                    info!(
-                        "after executed {:?}, the queue now is: {:?}, graph {:p}",
-                        executed_pid, // index in execute graph
-                        schedule_queue,
-                        &self.graph // graph is shared between threads
-                    );
-                    // context has a self queue. why not put all task to global queue so tasks are more evenly across all threads on same node
-                    schedule_queue.schedule(&self.global_tasks_queue, &mut context, self);
+                    // Not scheduled graph if pipeline is finished.
+                    if !self.global_tasks_queue.is_finished() {
+                        // We immediately schedule the processor again.
+                        let schedule_queue = self.graph.schedule_queue(executed_pid)?;
+                        info!(
+                            "after executed {:?}, the queue now is: {:?}, graph {:p}",
+                            executed_pid, // index in execute graph
+                            schedule_queue,
+                            &self.graph // graph is shared between threads
+                        );
+                        // context has a self queue. why not put all task to global queue so tasks are more evenly across all threads on same node
+                        schedule_queue.schedule(&self.global_tasks_queue, &mut context, self);
+                    }
                 }
             }
         }

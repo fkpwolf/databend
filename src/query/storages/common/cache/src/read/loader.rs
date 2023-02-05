@@ -25,27 +25,12 @@ pub type CacheKey = String;
 
 /// Loads an object from storage
 #[async_trait::async_trait]
-pub trait LoaderWithCacheKey<T> {
-    /// Loads object of type T, located by [params][LoadParams], the [CacheKey] returns will be
-    /// used as the key of cache item.
-    async fn load_with_cache_key(&self, params: &LoadParams) -> Result<(T, CacheKey)>;
-}
-
-/// Loads an object from storage
-#[async_trait::async_trait]
 pub trait Loader<T> {
     /// Loads object of type T, located by [params][LoadParams].
     async fn load(&self, params: &LoadParams) -> Result<T>;
-}
 
-// "Adapter" which makes a [Loader] impl [LoaderWithKey].
-// LoadParams::location will be used as the cache key
-#[async_trait::async_trait]
-impl<L, T> LoaderWithCacheKey<T> for L
-where L: Loader<T> + Send + Sync
-{
-    async fn load_with_cache_key(&self, params: &LoadParams) -> Result<(T, CacheKey)> {
-        let v = self.load(params).await?;
-        Ok((v, params.location.clone()))
+    /// the [CacheKey] returns will be used as the key of cached item.
+    fn cache_key(&self, params: &LoadParams) -> CacheKey {
+        params.location.clone()
     }
 }

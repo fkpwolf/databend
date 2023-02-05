@@ -14,6 +14,7 @@
 
 use std::io::Write;
 
+use common_ast::display_parser_error;
 use common_ast::parser::expr::*;
 use common_ast::parser::parse_sql;
 use common_ast::parser::query::*;
@@ -22,7 +23,6 @@ use common_ast::parser::tokenize_sql;
 use common_ast::rule;
 use common_ast::Backtrace;
 use common_ast::Dialect;
-use common_ast::DisplayError;
 use common_ast::Input;
 use common_exception::Result;
 use goldenfile::Mint;
@@ -46,7 +46,7 @@ macro_rules! run_parser {
                 writeln!($file, "\n").unwrap();
             }
             Err(nom::Err::Error(err) | nom::Err::Failure(err)) => {
-                let report = err.display_error(()).trim_end().to_string();
+                let report = display_parser_error(err, $source).trim_end().to_string();
                 writeln!($file, "---------- Input ----------").unwrap();
                 writeln!($file, "{}", $source).unwrap();
                 writeln!($file, "---------- Output ---------").unwrap();
@@ -101,6 +101,8 @@ fn test_statement() {
         r#"create view v as select number % 3 as a from numbers(1000);"#,
         r#"alter view v as select number % 3 as a from numbers(1000);"#,
         r#"drop view v;"#,
+        r#"create view v1(c1) as select number % 3 as a from numbers(1000);"#,
+        r#"alter view v1(c2) as select number % 3 as a from numbers(1000);"#,
         r#"rename table d.t to e.s;"#,
         r#"truncate table test;"#,
         r#"truncate table test_db.test;"#,
@@ -191,7 +193,7 @@ fn test_statement() {
         r#"COPY INTO mytable
                 FROM @~/mybucket/data.csv
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -200,7 +202,7 @@ fn test_statement() {
         r#"COPY INTO mytable
                 FROM 's3://mybucket/data.csv'
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -212,7 +214,7 @@ fn test_statement() {
                     ENDPOINT_URL = 'http://127.0.0.1:9900'
                 )
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -225,7 +227,7 @@ fn test_statement() {
                 )
                 size_limit=10
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -237,7 +239,7 @@ fn test_statement() {
         r#"COPY INTO mytable
                 FROM @my_stage
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -246,7 +248,7 @@ fn test_statement() {
         r#"COPY INTO 's3://mybucket/data.csv'
                 FROM mytable
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -255,7 +257,7 @@ fn test_statement() {
         r#"COPY INTO @my_stage
                 FROM mytable
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -268,7 +270,7 @@ fn test_statement() {
                     AWS_SECRET_KEY = 'secret_key'
                 )
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -277,7 +279,7 @@ fn test_statement() {
         r#"COPY INTO mytable
                 FROM @external_stage/path/to/file.csv
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -286,7 +288,7 @@ fn test_statement() {
         r#"COPY INTO mytable
                 FROM @external_stage/path/to/dir/
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -295,7 +297,7 @@ fn test_statement() {
         r#"COPY INTO mytable
                 FROM @external_stage/path/to/file.csv
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -304,7 +306,7 @@ fn test_statement() {
         r#"COPY INTO mytable
                 FROM 'fs:///path/to/data.csv'
                 FILE_FORMAT = (
-                    type = 'CSV'
+                    type = CSV
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
@@ -328,6 +330,8 @@ fn test_statement() {
         r#"PRESIGN @my_stage/path/to/file"#,
         r#"PRESIGN DOWNLOAD @my_stage/path/to/file"#,
         r#"PRESIGN UPLOAD @my_stage/path/to/file EXPIRE=7200"#,
+        r#"PRESIGN UPLOAD @my_stage/path/to/file EXPIRE=7200 CONTENT_TYPE='application/octet-stream'"#,
+        r#"PRESIGN UPLOAD @my_stage/path/to/file CONTENT_TYPE='application/octet-stream' EXPIRE=7200"#,
         r#"CREATE SHARE t COMMENT='share comment';"#,
         r#"CREATE SHARE IF NOT EXISTS t;"#,
         r#"DROP SHARE a;"#,

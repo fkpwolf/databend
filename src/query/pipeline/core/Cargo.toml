@@ -23,4 +23,7 @@ petgraph = "0.6.2"
 tracing = "0.1.36"
 
 [dev-dependencies]
-tokio = { version = "1.23.1", features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+typetag = "0.2.3"

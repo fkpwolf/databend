@@ -22,8 +22,10 @@ use std::sync::Arc;
 
 use common_catalog::plan::PartInfo;
 use common_catalog::plan::PartInfoPtr;
+use common_catalog::table::ColumnId;
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_expression::Scalar;
 use storages_common_table_meta::meta::ColumnMeta;
 use storages_common_table_meta::meta::Compression;
 
@@ -34,9 +36,10 @@ pub struct FusePartInfo {
     /// the `format_version` is the version of the block which the `location` points to
     pub format_version: u64,
     pub nums_rows: usize,
-    pub columns_meta: HashMap<usize, ColumnMeta>,
+    pub columns_meta: HashMap<ColumnId, ColumnMeta>,
     pub compression: Compression,
 
+    pub sort_min_max: Option<(Scalar, Scalar)>,
     /// page range in the file
     pub range: Option<Range<usize>>,
 }
@@ -66,8 +69,9 @@ impl FusePartInfo {
         location: String,
         format_version: u64,
         rows_count: u64,
-        columns_meta: HashMap<usize, ColumnMeta>,
+        columns_meta: HashMap<ColumnId, ColumnMeta>,
         compression: Compression,
+        sort_min_max: Option<(Scalar, Scalar)>,
         range: Option<Range<usize>>,
     ) -> Arc<Box<dyn PartInfo>> {
         Arc::new(Box::new(FusePartInfo {
@@ -76,6 +80,7 @@ impl FusePartInfo {
             columns_meta,
             nums_rows: rows_count as usize,
             compression,
+            sort_min_max,
             range,
         }))
     }

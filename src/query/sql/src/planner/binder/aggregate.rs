@@ -14,15 +14,16 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use common_ast::ast::Expr;
 use common_ast::ast::Literal;
 use common_ast::ast::SelectTarget;
-use common_ast::DisplayError;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_expression::types::DataType;
 
+use super::prune_by_children;
 use crate::binder::scalar::ScalarBinder;
 use crate::binder::select::SelectList;
 use crate::binder::Binder;
@@ -216,13 +217,13 @@ impl<'a> AggregateRewriter<'a> {
     }
 }
 
-impl<'a> Binder {
+impl Binder {
     /// Analyze aggregates in select clause, this will rewrite aggregate functions.
     /// See `AggregateRewriter` for more details.
     pub(crate) fn analyze_aggregate_select(
         &mut self,
         bind_context: &mut BindContext,
-        select_list: &mut SelectList<'a>,
+        select_list: &mut SelectList,
     ) -> Result<()> {
         for item in select_list.items.iter_mut() {
             let mut rewriter = AggregateRewriter::new(bind_context, self.metadata.clone());
@@ -241,11 +242,11 @@ impl<'a> Binder {
     ///     `SELECT a as b, COUNT(a) FROM t GROUP BY b`.
     ///   - Scalar expressions that can be evaluated in current scope(doesn't contain aliases), e.g.
     ///     column `a` and expression `a+1` in `SELECT a as b, COUNT(a) FROM t GROUP BY a, a+1`.
-    pub async fn analyze_group_items(
+    pub async fn analyze_group_items<'a>(
         &mut self,
         bind_context: &mut BindContext,
         select_list: &SelectList<'a>,
-        group_by: &[Expr<'a>],
+        group_by: &[Expr],
     ) -> Result<()> {
         let mut available_aliases = vec![];
 
@@ -304,6 +305,7 @@ impl<'a> Binder {
             group_items: bind_context.aggregate_info.group_items.clone(),
             aggregate_functions: bind_context.aggregate_info.aggregate_functions.clone(),
             from_distinct: false,
+            limit: None,
         };
         new_expr = SExpr::create_unary(aggregate_plan.into(), new_expr);
 
@@ -313,8 +315,8 @@ impl<'a> Binder {
     async fn resolve_group_items(
         &mut self,
         bind_context: &mut BindContext,
-        select_list: &SelectList<'a>,
-        group_by: &[Expr<'a>],
+        select_list: &SelectList<'_>,
+        group_by: &[Expr],
         available_aliases: &[(ColumnBinding, ScalarExpr)],
     ) -> Result<()> {
         // Resolve group items with `FROM` context. Since the alias item can not be resolved
@@ -390,20 +392,48 @@ impl<'a> Binder {
                 bind_context.aggregate_info.group_items.len() - 1,
             );
         }
+
+        // Remove dependent group items, group by a, f(a, b), f(a), b ---> group by a,b
+        let mut results = vec![];
+        for item in bind_context.aggregate_info.group_items.iter() {
+            let columns: HashSet<ScalarExpr> = bind_context
+                .aggregate_info
+                .group_items
+                .iter()
+                .filter(|p| p.scalar != item.scalar)
+                .map(|p| p.scalar.clone())
+                .collect();
+
+            if prune_by_children(&item.scalar, &columns) {
+                continue;
+            }
+            results.push(item.clone());
+        }
+
+        bind_context.aggregate_info.group_items_map.clear();
+        for (i, item) in results.iter().enumerate() {
+            bind_context
+                .aggregate_info
+                .group_items_map
+                .insert(format!("{:?}", &item.scalar), i);
+        }
+        bind_context.aggregate_info.group_items = results;
         Ok(())
     }
 
     fn resolve_index_item(
-        expr: &Expr<'a>,
+        expr: &Expr,
         index: u64,
-        select_list: &SelectList<'a>,
+        select_list: &SelectList,
     ) -> Result<(ScalarExpr, String)> {
         // Convert to zero-based index
         let index = index as usize - 1;
         if index >= select_list.items.len() {
-            return Err(ErrorCode::SemanticError(expr.span().display_error(
-                format!("GROUP BY position {} is not in select list", index + 1),
-            )));
+            return Err(ErrorCode::SemanticError(format!(
+                "GROUP BY position {} is not in select list",
+                index + 1
+            ))
+            .set_span(expr.span()));
         }
         let item = select_list
             .items
@@ -418,7 +448,7 @@ impl<'a> Binder {
 
     fn resolve_alias_item(
         bind_context: &mut BindContext,
-        expr: &Expr<'a>,
+        expr: &Expr,
         available_aliases: &[(ColumnBinding, ScalarExpr)],
         original_error: ErrorCode,
     ) -> Result<(ScalarExpr, DataType)> {
@@ -443,9 +473,10 @@ impl<'a> Binder {
         if result.is_empty() {
             Err(original_error)
         } else if result.len() > 1 {
-            Err(ErrorCode::SemanticError(expr.span().display_error(
-                format!("GROUP BY \"{}\" is ambiguous", expr),
-            )))
+            Err(
+                ErrorCode::SemanticError(format!("GROUP BY \"{}\" is ambiguous", expr))
+                    .set_span(expr.span()),
+            )
         } else {
             let (column_binding, scalar) = available_aliases[result[0]].clone();
             // We will add the alias to BindContext, so we can reference it

@@ -55,8 +55,8 @@ use common_io::cursor_ext::ReadCheckPointExt;
 use common_meta_types::FileFormatOptions;
 use common_meta_types::UserStageInfo;
 use common_pipeline_core::Pipeline;
-use common_pipeline_sources::processors::sources::AsyncSource;
-use common_pipeline_sources::processors::sources::AsyncSourcer;
+use common_pipeline_sources::AsyncSource;
+use common_pipeline_sources::AsyncSourcer;
 use common_pipeline_transforms::processors::transforms::Transform;
 use common_sql::evaluator::BlockOperator;
 use common_sql::evaluator::CompoundBlockOperator;
@@ -823,8 +823,8 @@ async fn fill_default_value(
     Ok(())
 }
 
-async fn exprs_to_scalar<'a>(
-    exprs: Vec<AExpr<'a>>,
+async fn exprs_to_scalar(
+    exprs: Vec<AExpr>,
     schema: &DataSchemaRef,
     ctx: Arc<dyn TableContext>,
     name_resolution_ctx: &NameResolutionContext,
@@ -881,7 +881,7 @@ async fn exprs_to_scalar<'a>(
         }],
         1,
     );
-    let func_ctx = ctx.try_get_function_context()?;
+    let func_ctx = ctx.get_function_context()?;
     let mut expression_transform = CompoundBlockOperator {
         operators,
         ctx: func_ctx,

@@ -24,6 +24,7 @@ use common_catalog::plan::PartInfoPtr;
 use common_catalog::table_context::TableContext;
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_expression::filter_helper::FilterHelpers;
 use common_expression::types::AnyType;
 use common_expression::DataBlock;
 use common_expression::DataSchemaRef;
@@ -125,7 +126,7 @@ impl HiveTableSource {
     }
 
     fn try_get_partitions(&mut self) -> Result<()> {
-        match self.ctx.try_get_part() {
+        match self.ctx.get_partition() {
             None => self.state = State::Finish,
             Some(part_info) => {
                 self.state = State::ReadMeta(Some(part_info));
@@ -142,15 +143,15 @@ impl HiveTableSource {
     ) -> Result<(bool, Vec<Value<AnyType>>)> {
         let mut valids = vec![];
         let mut exists = false;
-        let func_ctx = self.ctx.try_get_function_context()?;
+        let func_ctx = self.ctx.get_function_context()?;
         for datablock in data_blocks {
             let evaluator = Evaluator::new(datablock, func_ctx, &BUILTIN_FUNCTIONS);
-            let res = evaluator.run(filter).map_err(|(_, e)| {
-                ErrorCode::Internal(format!("eval prewhere filter failed: {}.", e))
-            })?;
+            let res = evaluator
+                .run(filter)
+                .map_err(|e| e.add_message("eval prewhere filter failed:"))?;
             valids.push(res.clone());
             // shortcut, if predicates is const boolean (or can be cast to boolean)
-            match DataBlock::filter_exists(&res)? {
+            match FilterHelpers::filter_exists(&res)? {
                 true => {
                     exists = true;
                 }
@@ -272,7 +273,7 @@ impl Processor for HiveTableSource {
 
     fn event(&mut self) -> Result<Event> {
         if matches!(self.state, State::ReadMeta(None)) {
-            match self.ctx.try_get_part() {
+            match self.ctx.get_partition() {
                 None => self.state = State::Finish,
                 Some(part_info) => {
                     self.state = State::ReadMeta(Some(part_info));

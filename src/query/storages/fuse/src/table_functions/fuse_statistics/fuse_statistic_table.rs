@@ -27,12 +27,11 @@ use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 use common_pipeline_core::processors::processor::ProcessorPtr;
-use common_pipeline_sources::processors::sources::AsyncSource;
-use common_pipeline_sources::processors::sources::AsyncSourcer;
+use common_pipeline_sources::AsyncSource;
+use common_pipeline_sources::AsyncSourcer;
 
 use super::fuse_statistic::FuseStatistic;
 use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::Pipe;
 use crate::pipelines::Pipeline;
 use crate::sessions::TableContext;
 use crate::table_functions::fuse_snapshots::parse_func_history_args;
@@ -112,17 +111,17 @@ impl Table for FuseStatisticTable {
         _plan: &DataSourcePlan,
         pipeline: &mut Pipeline,
     ) -> Result<()> {
-        let output = OutputPort::create();
-        pipeline.add_pipe(Pipe::SimplePipe {
-            inputs_port: vec![],
-            outputs_port: vec![output.clone()],
-            processors: vec![FuseStatisticSource::create(
-                ctx,
-                output,
-                self.arg_database_name.to_owned(),
-                self.arg_table_name.to_owned(),
-            )?],
-        });
+        pipeline.add_source(
+            |output| {
+                FuseStatisticSource::create(
+                    ctx.clone(),
+                    output,
+                    self.arg_database_name.to_owned(),
+                    self.arg_table_name.to_owned(),
+                )
+            },
+            1,
+        )?;
 
         Ok(())
     }
