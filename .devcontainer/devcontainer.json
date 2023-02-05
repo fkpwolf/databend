@@ -1,5 +1,10 @@
 {
 	"name": "Databend",
+	"build": {
+		"args": {
+			"BUILDKIT_INLINE_CACHE": "0"
+		}
+	},
 	"extensions": [
 		"cschleiden.vscode-github-actions",
 		"rust-lang.rust-analyzer",
