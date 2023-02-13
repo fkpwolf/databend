@@ -187,14 +187,7 @@ impl HiveTable {
             |_| 0
         };
 
-        let output_projection = match PushDownInfo::prewhere_of_push_downs(&plan.push_downs) {
-            None => {
-                PushDownInfo::projection_of_push_downs(&self.table_info.schema(), &plan.push_downs)
-            }
-            Some(v) => v.output_columns,
-        };
-        let output_schema = Arc::new(output_projection.project_schema(&plan.source_info.schema()));
-        let output_schema = Arc::new(DataSchema::from(output_schema));
+        let output_schema = Arc::new(DataSchema::from(plan.schema()));
 
         let prewhere_all_partitions =
             self.is_prewhere_column_partition_keys(self.table_info.schema(), &plan.push_downs)?;
@@ -239,7 +232,7 @@ impl HiveTable {
 
     // simple select query is the sql likes `select * from xx limit 10` or
     // `select * from xx where p_date = '20220201' limit 10` where p_date is a partition column;
-    // we just need to read a few datas from table
+    // we just need to read a few data from table
     fn is_simple_select_query(&self, plan: &DataSourcePlan) -> bool {
         // couldn't get groupby order by info
         if let Some(PushDownInfo {
@@ -686,7 +679,7 @@ impl HiveFileInfo {
     }
 }
 
-// convert hdfs path format to opendal path formated
+// convert hdfs path format to opendal path formatted
 //
 // there are two rules:
 // 1. erase the schema related info from hdfs path, for example, hdfs://namenode:8020/abc/a is converted to /abc/a

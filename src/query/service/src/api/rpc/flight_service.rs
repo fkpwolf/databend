@@ -109,7 +109,7 @@ impl FlightService for DatabendQueryFlightService {
         match req.get_metadata("x-type")?.as_str() {
             "request_server_exchange" => {
                 let query_id = req.get_metadata("x-query-id")?;
-                let (tx, rx) = async_channel::unbounded();
+                let (tx, rx) = async_channel::bounded(8);
                 let exchange = FlightExchange::from_server(req, tx);
 
                 DataExchangeManager::instance().handle_statistics_exchange(query_id, exchange)?;
@@ -120,7 +120,7 @@ impl FlightService for DatabendQueryFlightService {
                 let query_id = req.get_metadata("x-query-id")?;
                 let fragment = req.get_metadata("x-fragment-id")?.parse::<usize>().unwrap();
 
-                let (tx, rx) = async_channel::unbounded();
+                let (tx, rx) = async_channel::bounded(8);
                 let exchange = FlightExchange::from_server(req, tx);
 
                 DataExchangeManager::instance()

@@ -19,7 +19,7 @@ use std::fmt::Formatter;
 use crate::ast::statements::show::ShowLimit;
 use crate::ast::write_comma_separated_list;
 use crate::ast::write_period_separated_list;
-use crate::ast::write_space_seperated_map;
+use crate::ast::write_space_separated_map;
 use crate::ast::Expr;
 use crate::ast::Identifier;
 use crate::ast::Query;
@@ -150,7 +150,7 @@ impl Display for CreateTableStmt {
         }
 
         // Format table options
-        write_space_seperated_map(f, self.table_options.iter())?;
+        write_space_separated_map(f, self.table_options.iter())?;
         if let Some(as_query) = &self.as_query {
             write!(f, " AS {as_query}")?;
         }
@@ -282,6 +282,12 @@ pub enum AlterTableAction {
     RenameTable {
         new_table: Identifier,
     },
+    AddColumn {
+        column: ColumnDefinition,
+    },
+    DropColumn {
+        column: Identifier,
+    },
     AlterTableClusterKey {
         cluster_by: Vec<Expr>,
     },
@@ -300,6 +306,12 @@ impl Display for AlterTableAction {
         match self {
             AlterTableAction::RenameTable { new_table } => {
                 write!(f, "RENAME TO {new_table}")
+            }
+            AlterTableAction::AddColumn { column } => {
+                write!(f, "ADD COLUMN {column}")
+            }
+            AlterTableAction::DropColumn { column } => {
+                write!(f, "DROP COLUMN {column}")
             }
             AlterTableAction::AlterTableClusterKey { cluster_by } => {
                 write!(f, "CLUSTER BY ")?;

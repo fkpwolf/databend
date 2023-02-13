@@ -318,6 +318,8 @@ pub enum TokenKind {
     #[token("CHAR", ignore(ascii_case))]
     CHAR,
     #[token("CHARACTER", ignore(ascii_case))]
+    #[token("COLUMN", ignore(ascii_case))]
+    COLUMN,
     CHARACTER,
     #[token("COMPRESSION", ignore(ascii_case))]
     COMPRESSION,
@@ -543,8 +545,8 @@ pub enum TokenKind {
     METRICS,
     #[token("MICROSECONDS", ignore(ascii_case))]
     MICROSECONDS,
-    #[token("MILLENIUM", ignore(ascii_case))]
-    MILLENIUM,
+    #[token("MILLENNIUM", ignore(ascii_case))]
+    MILLENNIUM,
     #[token("MILLISECONDS", ignore(ascii_case))]
     MILLISECONDS,
     #[token("MINUTE", ignore(ascii_case))]
@@ -749,6 +751,8 @@ pub enum TokenKind {
     TRANSIENT,
     #[token("TRIM", ignore(ascii_case))]
     TRIM,
+    #[token("ARRAY_SORT", ignore(ascii_case))]
+    ARRAY_SORT,
     #[token("TRUE", ignore(ascii_case))]
     TRUE,
     #[token("TRUNCATE", ignore(ascii_case))]
@@ -979,6 +983,7 @@ impl TokenKind {
             | TokenKind::TRAILING
             // | TokenKind::TREAT
             | TokenKind::TRIM
+            | TokenKind::ARRAY_SORT
             | TokenKind::TRUE
             | TokenKind::TRY_CAST
             // | TokenKind::UNIQUE

@@ -16,8 +16,8 @@ use std::fmt::Display;
 
 use common_exception::Result;
 use common_exception::Span;
-use common_meta_types::PrincipalIdentity;
-use common_meta_types::UserIdentity;
+use common_meta_app::principal::PrincipalIdentity;
+use common_meta_app::principal::UserIdentity;
 
 use crate::ast::*;
 use crate::visitors::Visitor;
@@ -343,13 +343,13 @@ impl<'ast> Visitor<'ast> for AstFormatVisitor {
         self.children.push(node);
     }
 
-    fn visit_positon(&mut self, _span: Span, substr_expr: &'ast Expr, str_expr: &'ast Expr) {
+    fn visit_position(&mut self, _span: Span, substr_expr: &'ast Expr, str_expr: &'ast Expr) {
         self.visit_expr(substr_expr);
         let substr_expr_child = self.children.pop().unwrap();
         self.visit_expr(str_expr);
         let str_expr_child = self.children.pop().unwrap();
 
-        let name = "Function Positon".to_string();
+        let name = "Function Position".to_string();
         let format_ctx = AstFormatContext::with_children(name, 2);
         let node =
             FormatTreeNode::with_children(format_ctx, vec![substr_expr_child, str_expr_child]);
@@ -1269,6 +1269,16 @@ impl<'ast> Visitor<'ast> for AstFormatVisitor {
         let action_child = match &stmt.action {
             AlterTableAction::RenameTable { new_table } => {
                 let action_name = format!("Action RenameTo {}", new_table);
+                let action_format_ctx = AstFormatContext::new(action_name);
+                FormatTreeNode::new(action_format_ctx)
+            }
+            AlterTableAction::AddColumn { column } => {
+                let action_name = format!("Action Add column {}", column);
+                let action_format_ctx = AstFormatContext::new(action_name);
+                FormatTreeNode::new(action_format_ctx)
+            }
+            AlterTableAction::DropColumn { column } => {
+                let action_name = format!("Action Drop column {}", column);
                 let action_format_ctx = AstFormatContext::new(action_name);
                 FormatTreeNode::new(action_format_ctx)
             }
