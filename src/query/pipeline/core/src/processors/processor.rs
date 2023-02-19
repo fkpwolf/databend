@@ -125,3 +125,30 @@ impl ProcessorPtr {
         (*p).async_process().boxed() // Future, invoked by IO-worker thread
     }
 }
+
+#[async_trait::async_trait]
+impl<T: Processor + ?Sized> Processor for Box<T> {
+    fn name(&self) -> String {
+        (**self).name()
+    }
+
+    fn as_any(&mut self) -> &mut dyn Any {
+        (**self).as_any()
+    }
+
+    fn event(&mut self) -> Result<Event> {
+        (**self).event()
+    }
+
+    fn interrupt(&self) {
+        (**self).interrupt()
+    }
+
+    fn process(&mut self) -> Result<()> {
+        (**self).process()
+    }
+
+    async fn async_process(&mut self) -> Result<()> {
+        (**self).async_process().await
+    }
+}

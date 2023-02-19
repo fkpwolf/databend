@@ -55,7 +55,7 @@ impl SelectInterpreterV2 {
     }
 
     pub async fn build_pipeline(&self) -> Result<PipelineBuildResult> {
-        let builder = PhysicalPlanBuilder::new(self.metadata.clone(), self.ctx.clone());
+        let mut builder = PhysicalPlanBuilder::new(self.metadata.clone(), self.ctx.clone());
         let physical_plan = builder.build(&self.s_expr).await?;
         info!("PhysicalPlan:\n{}", physical_plan.format_indent(1));
         info!("PhysicalPlan raw:\n{:?}", physical_plan); // this PhysicalPlan includes all segment_location, means not be partitioned yet
@@ -64,6 +64,7 @@ impl SelectInterpreterV2 {
             &self.bind_context.columns,
             &physical_plan,
             self.ignore_result,
+            false,
         )
         .await
     }

@@ -119,31 +119,11 @@ const config = {
                         label: 'Download',
                         position: 'right',
                     },
-                    {
-                        to: '/doc/contributing/good-pr',
-                        label: 'Contributing',
-                        position: 'right',
-                    },
-                    {
-                        href: 'https://perf.databend.rs',
-                        label: 'Benchmarking',
-                        position: 'right',
-                    },
                     { to: '/blog', label: 'Blog', position: 'right' }, // or position: 'right'
                     {
                         href: 'https://github.com/datafuselabs/databend',
                         label: 'GitHub',
                         position: 'right',
-                    },
-                    {
-                        type: 'docsVersionDropdown',
-                        position: 'right',
-                        dropdownItemsAfter: [
-                            {
-                                href: 'https://databend-qe5h89pp4-databend.vercel.app',
-                                label: 'v0.8.177-nightly',
-                            },
-                        ]
                     },
                     {
                         type: 'localeDropdown',
@@ -161,33 +141,33 @@ const config = {
                 style: 'dark',
                 links: [
                     {
-                        title: 'About',
+                        title: 'GET STARTED',
                         items: [
                             {
-                                label: 'What is Databend?',
+                                label: 'What is Databend',
                                 to: '/doc'
                             },
                             {
-                                label: 'Performance',
-                                to: '/doc/performance'
+                                label: 'Quick Start',
+                                to: '/doc/guides'
                             },
                         ]
                     },
                     {
-                        title: 'Resources',
+                        title: 'RESOURCES',
                         items: [
                             {
                                 label: 'Deployment',
                                 to: '/doc/deploy'
                             },
                             {
-                                label: 'Develop',
-                                to: '/doc/develop'
+                                label: 'Releases',
+                                to: '/doc/releases'
                             },
                         ]
                     },
                     {
-                        title: 'Community',
+                        title: 'COMMUNITY',
                         items: [
                             {
                                 label: 'Slack',
@@ -199,21 +179,8 @@ const config = {
                             },
                         ],
                     },
-                    {
-                        title: 'More',
-                        items: [
-                            {
-                                label: 'Weekly',
-                                href: 'https://weekly.databend.rs/'
-                            },
-                            {
-                                label: 'GitHub',
-                                href: 'https://github.com/datafuselabs/databend',
-                            },
-                        ],
-                    },
                 ],
-                copyright: `Copyright © ${new Date().getFullYear()} Datafuse Labs, Inc. Built with Docusaurus. <br><br> <img src="https://www.datocms-assets.com/31049/1618983297-powered-by-vercel.svg">`,
+                copyright: `Copyright © 2023 Datafuse Labs, Inc. Built with Docusaurus. <br><br> <img src="https://www.datocms-assets.com/31049/1618983297-powered-by-vercel.svg">`,
             },
             prism: {
                 theme: lightCodeTheme,

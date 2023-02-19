@@ -27,6 +27,7 @@ use common_config::GlobalConfig;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_grpc::ConnectionFactory;
+use common_profile::ProfSpanSetRef;
 use parking_lot::Mutex;
 use parking_lot::ReentrantMutex;
 use tracing::info;
@@ -39,6 +40,7 @@ use crate::api::rpc::exchange::exchange_transform::ExchangeTransform;
 use crate::api::rpc::exchange::statistics_receiver::StatisticsReceiver;
 use crate::api::rpc::exchange::statistics_sender::StatisticsSender;
 use crate::api::rpc::flight_client::FlightExchange;
+use crate::api::rpc::flight_client::FlightExchangeRef;
 use crate::api::rpc::flight_scatter_broadcast::BroadcastFlightScatter;
 use crate::api::rpc::flight_scatter_hash::HashFlightScatter;
 use crate::api::rpc::Packet;
@@ -317,7 +319,7 @@ impl DataExchangeManager {
         }
     }
 
-    pub fn get_flight_exchanges(&self, params: &ExchangeParams) -> Result<Vec<FlightExchange>> {
+    pub fn get_flight_exchanges(&self, params: &ExchangeParams) -> Result<Vec<FlightExchangeRef>> {
         let queries_coordinator_guard = self.queries_coordinator.lock();
         let queries_coordinator = unsafe { &*queries_coordinator_guard.deref().get() };
 
@@ -404,13 +406,13 @@ impl QueryCoordinator {
         Ok(())
     }
 
-    pub fn get_flight_exchanges(&self, params: &ExchangeParams) -> Result<Vec<FlightExchange>> {
+    pub fn get_flight_exchanges(&self, params: &ExchangeParams) -> Result<Vec<FlightExchangeRef>> {
         match params {
             ExchangeParams::MergeExchange(params) => {
                 let mut exchanges = vec![];
                 for ((_target, fragment), exchange) in &self.fragment_exchanges {
                     if *fragment == params.fragment_id {
-                        exchanges.push(exchange.clone());
+                        exchanges.push(exchange.get_ref());
                     }
                 }
 
@@ -421,7 +423,7 @@ impl QueryCoordinator {
 
                 for destination in &params.destination_ids {
                     exchanges.push(match destination == &params.executor_id {
-                        true => Ok(FlightExchange::Dummy),
+                        true => Ok(FlightExchange::Dummy.get_ref()),
                         false => match self
                             .fragment_exchanges
                             .get(&(destination.clone(), params.fragment_id))
@@ -430,7 +432,7 @@ impl QueryCoordinator {
                                 "Unknown fragment exchange channel, {}, {}",
                                 destination, params.fragment_id
                             ))),
-                            Some(exchange_channel) => Ok(exchange_channel.clone()),
+                            Some(exchange_channel) => Ok(exchange_channel.get_ref()),
                         },
                     }?);
                 }
@@ -670,7 +672,8 @@ impl FragmentCoordinator {
             match &self.payload {
                 FragmentPayload::Plan(plan) => {
                     let pipeline_ctx = QueryContext::create_from(ctx);
-                    let pipeline_builder = PipelineBuilder::create(pipeline_ctx);
+                    let pipeline_builder =
+                        PipelineBuilder::create(pipeline_ctx, false, ProfSpanSetRef::default());
                     self.pipeline_build_res = Some(pipeline_builder.finalize(plan)?);
                 }
             };

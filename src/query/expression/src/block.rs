@@ -297,6 +297,12 @@ impl DataBlock {
 
     #[inline]
     pub fn add_meta(self, meta: Option<BlockMetaInfoPtr>) -> Result<Self> {
+        if self.meta.is_some() {
+            return Err(ErrorCode::Internal(
+                "Internal error, block meta data is set twice.",
+            ));
+        }
+
         Ok(Self {
             columns: self.columns.clone(),
             num_rows: self.num_rows,
@@ -412,8 +418,8 @@ impl DataBlock {
         data_block: &DataBlock,
         block_column_ids: &HashSet<u32>,
         default_vals: &[Scalar],
-        num_rows: usize,
     ) -> Result<DataBlock> {
+        let num_rows = data_block.num_rows();
         let mut new_data_block = DataBlock::empty();
         new_data_block.num_rows = num_rows;
         let mut data_block_columns_idx: usize = 0;
@@ -439,6 +445,7 @@ impl DataBlock {
 
             columns.push(column);
         }
+
         Ok(DataBlock::new(columns, num_rows))
     }
 }
