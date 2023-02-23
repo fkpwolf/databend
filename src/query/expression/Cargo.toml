@@ -14,11 +14,13 @@ test = false
 common-arrow = { path = "../../common/arrow" }
 common-datavalues = { path = "../datavalues" }
 common-exception = { path = "../../common/exception" }
+common-hashtable = { path = "../../common/hashtable" }
 common-io = { path = "../../common/io" }
 
 # Github dependencies
 
 # Crates.io dependencies
+base64 = "0.13.0"
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 comfy-table = "6"
@@ -51,3 +53,6 @@ common-ast = { path = "../ast" }
 goldenfile = "1.4"
 pretty_assertions = "1.3.0"
 rand = "0.8.5"
+
+[package.metadata.cargo-machete]
+ignored = ["parking_lot"]
