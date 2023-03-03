@@ -25,9 +25,11 @@ use crate::expression::Literal;
 use crate::expression::RawExpr;
 use crate::function::FunctionRegistry;
 use crate::function::FunctionSignature;
+use crate::types::decimal::DecimalSize;
 use crate::types::number::NumberDataType;
 use crate::types::number::NumberScalar;
 use crate::types::DataType;
+use crate::types::DecimalDataType;
 use crate::AutoCastRules;
 use crate::ColumnIndex;
 use crate::Scalar;
@@ -308,21 +310,25 @@ impl Substitution {
         Ok(self)
     }
 
-    pub fn apply(&self, ty: DataType) -> Result<DataType> {
+    pub fn apply(&self, ty: &DataType) -> Result<DataType> {
         match ty {
-            DataType::Generic(idx) => self.0.get(&idx).cloned().ok_or_else(|| {
+            DataType::Generic(idx) => self.0.get(idx).cloned().ok_or_else(|| {
                 ErrorCode::from_string_no_backtrace(format!("unbound generic type `T{idx}`"))
             }),
             DataType::Nullable(box ty) => Ok(DataType::Nullable(Box::new(self.apply(ty)?))),
             DataType::Array(box ty) => Ok(DataType::Array(Box::new(self.apply(ty)?))),
+            DataType::Map(box ty) => {
+                let inner_ty = self.apply(ty)?;
+                Ok(DataType::Map(Box::new(inner_ty)))
+            }
             DataType::Tuple(fields_ty) => {
                 let fields_ty = fields_ty
-                    .into_iter()
+                    .iter()
                     .map(|field_ty| self.apply(field_ty))
                     .collect::<Result<_>>()?;
                 Ok(DataType::Tuple(fields_ty))
             }
-            ty => Ok(ty),
+            ty => Ok(ty.clone()),
         }
     }
 }
@@ -335,31 +341,23 @@ pub fn try_check_function<Index: ColumnIndex>(
     auto_cast_rules: AutoCastRules,
     fn_registry: &FunctionRegistry,
 ) -> Result<(Vec<Expr<Index>>, DataType, Vec<DataType>)> {
-    assert_eq!(args.len(), sig.args_type.len());
-
-    let substs = args
-        .iter()
-        .map(Expr::data_type)
-        .zip(&sig.args_type)
-        .map(|(src_ty, dest_ty)| unify(src_ty, dest_ty, auto_cast_rules))
-        .collect::<Result<Vec<_>>>()?;
-
-    let subst = substs
-        .into_iter()
-        .try_reduce(|subst1, subst2| subst1.merge(subst2, auto_cast_rules))?
-        .unwrap_or_else(Substitution::empty);
+    let subst = try_unify_signature(
+        args.iter().map(Expr::data_type),
+        sig.args_type.iter(),
+        auto_cast_rules,
+    )?;
 
     let checked_args = args
         .iter()
         .zip(&sig.args_type)
         .map(|(arg, sig_type)| {
-            let sig_type = subst.apply(sig_type.clone())?;
+            let sig_type = subst.apply(sig_type)?;
             let is_try = fn_registry.is_auto_try_cast_rule(arg.data_type(), &sig_type);
             check_cast(span, is_try, arg.clone(), &sig_type, fn_registry)
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let return_type = subst.apply(sig.return_type.clone())?;
+    let return_type = subst.apply(&sig.return_type)?;
 
     let generics = subst
         .0
@@ -381,19 +379,44 @@ pub fn try_check_function<Index: ColumnIndex>(
     Ok((checked_args, return_type, generics))
 }
 
+pub fn try_unify_signature(
+    src_tys: impl IntoIterator<Item = &DataType> + ExactSizeIterator,
+    dest_tys: impl IntoIterator<Item = &DataType> + ExactSizeIterator,
+    auto_cast_rules: AutoCastRules,
+) -> Result<Substitution> {
+    assert_eq!(src_tys.len(), dest_tys.len());
+
+    let substs = src_tys
+        .into_iter()
+        .zip(dest_tys)
+        .map(|(src_ty, dest_ty)| unify(src_ty, dest_ty, auto_cast_rules))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(substs
+        .into_iter()
+        .try_reduce(|subst1, subst2| subst1.merge(subst2, auto_cast_rules))?
+        .unwrap_or_else(Substitution::empty))
+}
+
 pub fn unify(
     src_ty: &DataType,
     dest_ty: &DataType,
     auto_cast_rules: AutoCastRules,
 ) -> Result<Substitution> {
     match (src_ty, dest_ty) {
-        (DataType::Generic(_), _) => unreachable!("source type must not contain generic type"),
+        (DataType::Generic(_), _) => Err(ErrorCode::from_string_no_backtrace(
+            "source type {src_ty} must not contain generic type".to_string(),
+        )),
+        (ty, DataType::Generic(_)) if ty.has_generic() => Err(ErrorCode::from_string_no_backtrace(
+            "source type {src_ty} must not contain generic type".to_string(),
+        )),
         (ty, DataType::Generic(idx)) => Ok(Substitution::equation(*idx, ty.clone())),
         (src_ty, dest_ty) if can_auto_cast_to(src_ty, dest_ty, auto_cast_rules) => {
             Ok(Substitution::empty())
         }
         (DataType::Null, DataType::Nullable(_)) => Ok(Substitution::empty()),
         (DataType::EmptyArray, DataType::Array(_)) => Ok(Substitution::empty()),
+        (DataType::EmptyMap, DataType::Map(_)) => Ok(Substitution::empty()),
         (DataType::Nullable(src_ty), DataType::Nullable(dest_ty)) => {
             unify(src_ty, dest_ty, auto_cast_rules)
         }
@@ -401,6 +424,10 @@ pub fn unify(
         (DataType::Array(src_ty), DataType::Array(dest_ty)) => {
             unify(src_ty, dest_ty, auto_cast_rules)
         }
+        (DataType::Map(box src_ty), DataType::Map(box dest_ty)) => match (src_ty, dest_ty) {
+            (DataType::Tuple(_), DataType::Tuple(_)) => unify(src_ty, dest_ty, auto_cast_rules),
+            (_, _) => unreachable!(),
+        },
         (DataType::Tuple(src_tys), DataType::Tuple(dest_tys))
             if src_tys.len() == dest_tys.len() =>
         {
@@ -438,6 +465,7 @@ pub fn can_auto_cast_to(
         }
         (DataType::Null, DataType::Nullable(_)) => true,
         (DataType::EmptyArray, DataType::Array(_)) => true,
+        (DataType::EmptyMap, DataType::Map(_)) => true,
         (DataType::Nullable(src_ty), DataType::Nullable(dest_ty)) => {
             can_auto_cast_to(src_ty, dest_ty, auto_cast_rules)
         }
@@ -445,6 +473,12 @@ pub fn can_auto_cast_to(
         (DataType::Array(src_ty), DataType::Array(dest_ty)) => {
             can_auto_cast_to(src_ty, dest_ty, auto_cast_rules)
         }
+        (DataType::Map(box src_ty), DataType::Map(box dest_ty)) => match (src_ty, dest_ty) {
+            (DataType::Tuple(_), DataType::Tuple(_)) => {
+                can_auto_cast_to(src_ty, dest_ty, auto_cast_rules)
+            }
+            (_, _) => unreachable!(),
+        },
         (DataType::Tuple(src_tys), DataType::Tuple(dest_tys))
             if src_tys.len() == dest_tys.len() =>
         {
@@ -453,7 +487,8 @@ pub fn can_auto_cast_to(
                 .zip(dest_tys)
                 .all(|(src_ty, dest_ty)| can_auto_cast_to(src_ty, dest_ty, auto_cast_rules))
         }
-        (DataType::Number(_) | DataType::Decimal(_), DataType::Decimal(_)) => true,
+        (DataType::Number(_), DataType::Decimal(_)) => true,
+        (DataType::Decimal(x), DataType::Decimal(y)) => x.precision() <= y.precision(),
         _ => false,
     }
 }
@@ -479,6 +514,11 @@ pub fn common_super_type(
         (DataType::Array(box ty1), DataType::Array(box ty2)) => Some(DataType::Array(Box::new(
             common_super_type(ty1, ty2, auto_cast_rules)?,
         ))),
+        (DataType::EmptyMap, ty @ DataType::Map(_))
+        | (ty @ DataType::Map(_), DataType::EmptyMap) => Some(ty),
+        (DataType::Map(box ty1), DataType::Map(box ty2)) => Some(DataType::Map(Box::new(
+            common_super_type(ty1, ty2, auto_cast_rules)?,
+        ))),
         (DataType::Tuple(tys1), DataType::Tuple(tys2)) if tys1.len() == tys2.len() => {
             let tys = tys1
                 .into_iter()
@@ -487,11 +527,24 @@ pub fn common_super_type(
                 .collect::<Option<Vec<_>>>()?;
             Some(DataType::Tuple(tys))
         }
-        // todo!("decimal")
-        // (
-        //     DataType::Number(_) | DataType::Decimal(_),
-        //     DataType::Number(_) | DataType::Decimal(_),
-        // ) =>  DataType::Decimal(?),
+        (DataType::Number(_), DataType::Decimal(ty))
+        | (DataType::Decimal(ty), DataType::Number(_)) => {
+            let max_precision = ty.max_precision();
+            let scale = ty.scale();
+
+            DecimalDataType::from_size(DecimalSize {
+                precision: max_precision,
+                scale,
+            })
+            .ok()
+            .map(DataType::Decimal)
+        }
+
+        (DataType::Decimal(a), DataType::Decimal(b)) => {
+            let ty = DecimalDataType::binary_result_type(&a, &b, false, false, true).ok();
+            ty.map(DataType::Decimal)
+        }
+
         (ty1, ty2) => {
             let ty1_can_cast_to = auto_cast_rules
                 .iter()

@@ -38,6 +38,7 @@ mod control;
 mod datetime;
 mod geo;
 mod hash;
+mod map;
 mod math;
 mod misc;
 mod other;
@@ -227,7 +228,7 @@ fn list_all_builtin_functions() {
     let fn_registry = &BUILTIN_FUNCTIONS;
 
     writeln!(file, "Simple functions:").unwrap();
-    for func in fn_registry
+    for (func, _) in fn_registry
         .funcs
         .iter()
         .sorted_by_key(|(name, _)| name.to_string())
