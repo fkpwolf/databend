@@ -16,6 +16,8 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 
 use common_exception::Result;
+use num_derive::FromPrimitive;
+use num_derive::ToPrimitive;
 
 use crate::optimizer::rule::TransformResult;
 use crate::optimizer::SExpr;
@@ -34,7 +36,9 @@ pub trait Rule {
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+// If add a new rule, please add it to the operator's corresponding `transformation_candidate_rules`
+// Such as `PushDownFilterAggregate` is related to `Filter` operator.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, FromPrimitive, ToPrimitive)]
 pub enum RuleID {
     // Rewrite rules
     NormalizeScalarFilter,
@@ -58,6 +62,7 @@ pub enum RuleID {
     MergeFilter,
     SplitAggregate,
     FoldCountAggregate,
+    PushDownPrewhere,
 
     // Exploration rules
     CommuteJoin,
@@ -93,6 +98,7 @@ impl Display for RuleID {
             RuleID::SplitAggregate => write!(f, "SplitAggregate"),
             RuleID::NormalizeDisjunctiveFilter => write!(f, "NormalizeDisjunctiveFilter"),
             RuleID::FoldCountAggregate => write!(f, "FoldCountAggregate"),
+            RuleID::PushDownPrewhere => write!(f, "PushDownPrewhere"),
 
             RuleID::CommuteJoin => write!(f, "CommuteJoin"),
             RuleID::CommuteJoinBaseTable => write!(f, "CommuteJoinBaseTable"),

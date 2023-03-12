@@ -16,6 +16,7 @@ use std::cmp::Ordering;
 use std::hash::Hash;
 use std::ops::Range;
 
+use common_arrow::arrow::bitmap::and;
 use common_arrow::arrow::bitmap::Bitmap;
 use common_arrow::arrow::bitmap::MutableBitmap;
 use common_arrow::arrow::buffer::Buffer;
@@ -26,6 +27,7 @@ use common_arrow::arrow::offset::OffsetsBuffer;
 use common_arrow::arrow::trusted_len::TrustedLen;
 use enum_as_inner::EnumAsInner;
 use itertools::Itertools;
+use ordered_float::OrderedFloat;
 use serde::de::Visitor;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -63,6 +65,7 @@ use crate::utils::arrow::deserialize_column;
 use crate::utils::arrow::serialize_column;
 use crate::with_decimal_type;
 use crate::with_number_type;
+use crate::TypeDeserializerImpl;
 
 #[derive(Debug, Clone, PartialEq, EnumAsInner)]
 pub enum Value<T: ValueType> {
@@ -76,9 +79,8 @@ pub enum ValueRef<'a, T: ValueType> {
     Column(T::Column),
 }
 
-#[derive(Debug, Clone, Default, EnumAsInner, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, EnumAsInner, Eq, Serialize, Deserialize)]
 pub enum Scalar {
-    #[default]
     Null,
     EmptyArray,
     EmptyMap,
@@ -274,6 +276,46 @@ impl Scalar {
             Scalar::Variant(s) => ScalarRef::Variant(s.as_slice()),
         }
     }
+
+    pub fn default_value(ty: &DataType) -> Scalar {
+        match ty {
+            DataType::Null => Scalar::Null,
+            DataType::EmptyArray => Scalar::EmptyArray,
+            DataType::EmptyMap => Scalar::EmptyMap,
+            DataType::Boolean => Scalar::Boolean(false),
+            DataType::String => Scalar::String(vec![]),
+            DataType::Number(num_ty) => Scalar::Number(match num_ty {
+                NumberDataType::UInt8 => NumberScalar::UInt8(0),
+                NumberDataType::UInt16 => NumberScalar::UInt16(0),
+                NumberDataType::UInt32 => NumberScalar::UInt32(0),
+                NumberDataType::UInt64 => NumberScalar::UInt64(0),
+                NumberDataType::Int8 => NumberScalar::Int8(0),
+                NumberDataType::Int16 => NumberScalar::Int16(0),
+                NumberDataType::Int32 => NumberScalar::Int32(0),
+                NumberDataType::Int64 => NumberScalar::Int64(0),
+                NumberDataType::Float32 => NumberScalar::Float32(OrderedFloat(0.0)),
+                NumberDataType::Float64 => NumberScalar::Float64(OrderedFloat(0.0)),
+            }),
+            DataType::Decimal(ty) => Scalar::Decimal(ty.default_scalar()),
+            DataType::Timestamp => Scalar::Timestamp(0),
+            DataType::Date => Scalar::Date(0),
+            DataType::Nullable(_) => Scalar::Null,
+            DataType::Array(ty) => {
+                let builder = ColumnBuilder::with_capacity(ty, 0);
+                let col = builder.build();
+                Scalar::Array(col)
+            }
+            DataType::Map(ty) => {
+                let builder = ColumnBuilder::with_capacity(ty, 0);
+                let col = builder.build();
+                Scalar::Map(col)
+            }
+            DataType::Tuple(tys) => Scalar::Tuple(tys.iter().map(Scalar::default_value).collect()),
+            DataType::Variant => Scalar::Variant(vec![]),
+
+            _ => unimplemented!(),
+        }
+    }
 }
 
 impl<'a> ScalarRef<'a> {
@@ -314,6 +356,7 @@ impl<'a> ScalarRef<'a> {
                 value: None,
             }),
             ScalarRef::EmptyArray => Domain::Array(None),
+            ScalarRef::EmptyMap => Domain::Map(None),
             ScalarRef::Number(num) => Domain::Number(num.domain()),
             ScalarRef::Decimal(dec) => Domain::Decimal(dec.domain()),
             ScalarRef::Boolean(true) => Domain::Boolean(BooleanDomain {
@@ -337,6 +380,20 @@ impl<'a> ScalarRef<'a> {
                     Domain::Array(Some(Box::new(array.domain())))
                 }
             }
+            ScalarRef::Map(map) => {
+                if map.len() == 0 {
+                    Domain::Map(None)
+                } else {
+                    let inner_domain = map.domain();
+                    let map_domain = match inner_domain {
+                        Domain::Tuple(domains) => {
+                            (Box::new(domains[0].clone()), Box::new(domains[1].clone()))
+                        }
+                        _ => unreachable!(),
+                    };
+                    Domain::Map(Some(map_domain))
+                }
+            }
             ScalarRef::Tuple(fields) => {
                 let types = data_type.as_tuple().unwrap();
                 Domain::Tuple(
@@ -347,7 +404,7 @@ impl<'a> ScalarRef<'a> {
                         .collect(),
                 )
             }
-            ScalarRef::EmptyMap | ScalarRef::Map(_) | ScalarRef::Variant(_) => Domain::Undefined,
+            ScalarRef::Variant(_) => Domain::Undefined,
         }
     }
 
@@ -426,7 +483,7 @@ impl PartialOrd for Scalar {
             (Scalar::Map(m1), Scalar::Map(m2)) => m1.partial_cmp(m2),
             (Scalar::Tuple(t1), Scalar::Tuple(t2)) => t1.partial_cmp(t2),
             (Scalar::Variant(v1), Scalar::Variant(v2)) => {
-                common_jsonb::compare(v1.as_slice(), v2.as_slice()).ok()
+                jsonb::compare(v1.as_slice(), v2.as_slice()).ok()
             }
             _ => None,
         }
@@ -460,7 +517,7 @@ impl PartialOrd for ScalarRef<'_> {
             (ScalarRef::Array(a1), ScalarRef::Array(a2)) => a1.partial_cmp(a2),
             (ScalarRef::Map(m1), ScalarRef::Map(m2)) => m1.partial_cmp(m2),
             (ScalarRef::Tuple(t1), ScalarRef::Tuple(t2)) => t1.partial_cmp(t2),
-            (ScalarRef::Variant(v1), ScalarRef::Variant(v2)) => common_jsonb::compare(v1, v2).ok(),
+            (ScalarRef::Variant(v1), ScalarRef::Variant(v2)) => jsonb::compare(v1, v2).ok(),
             _ => None,
         }
     }
@@ -546,7 +603,7 @@ impl PartialOrd for Column {
             }
             (Column::Variant(col1), Column::Variant(col2)) => col1
                 .iter()
-                .partial_cmp_by(col2.iter(), |v1, v2| common_jsonb::compare(v1, v2).ok()),
+                .partial_cmp_by(col2.iter(), |v1, v2| jsonb::compare(v1, v2).ok()),
             _ => None,
         }
     }
@@ -642,8 +699,7 @@ impl Column {
 
         if range.is_empty() {
             use crate::deserializations::TypeDeserializer;
-            let data_type = self.data_type();
-            let mut de = data_type.create_deserializer(0);
+            let mut de = TypeDeserializerImpl::with_capacity(&self.data_type(), 0);
             return de.finish_to_column();
         }
 
@@ -735,6 +791,20 @@ impl Column {
                     Domain::Array(Some(Box::new(inner_domain)))
                 }
             }
+            Column::Map(col) => {
+                if col.len() == 0 {
+                    Domain::Map(None)
+                } else {
+                    let inner_domain = col.values.domain();
+                    let map_domain = match inner_domain {
+                        Domain::Tuple(domains) => {
+                            (Box::new(domains[0].clone()), Box::new(domains[1].clone()))
+                        }
+                        _ => unreachable!(),
+                    };
+                    Domain::Map(Some(map_domain))
+                }
+            }
             Column::Nullable(col) => {
                 let inner_domain = col.column.domain();
                 Domain::Nullable(NullableDomain {
@@ -746,7 +816,7 @@ impl Column {
                 let domains = fields.iter().map(|col| col.domain()).collect::<Vec<_>>();
                 Domain::Tuple(domains)
             }
-            Column::Map(_) | Column::Variant(_) => Domain::Undefined,
+            Column::Variant(_) => Domain::Undefined,
         }
     }
 
@@ -783,6 +853,14 @@ impl Column {
                 DataType::Tuple(inner)
             }
             Column::Variant(_) => DataType::Variant,
+        }
+    }
+
+    /// Unnest a nested column into one column.
+    pub fn unnest(&self) -> Self {
+        match self {
+            Column::Array(array) => array.underlying_column().unnest(),
+            col => col.clone(),
         }
     }
 
@@ -985,11 +1063,7 @@ impl Column {
             }
             Column::Nullable(col) => {
                 let arrow_array = col.column.as_arrow();
-                match arrow_array.data_type() {
-                    ArrowType::Null => arrow_array,
-                    ArrowType::Extension(_, t, _) if **t == ArrowType::Null => arrow_array,
-                    _ => arrow_array.with_validity(Some(col.validity.clone())),
-                }
+                Self::set_validity(arrow_array.clone(), &col.validity)
             }
             Column::Tuple { fields, .. } => Box::new(
                 common_arrow::arrow::array::StructArray::try_new(
@@ -1012,6 +1086,45 @@ impl Column {
                     .unwrap(),
                 )
             }
+        }
+    }
+
+    fn set_validity(
+        arrow_array: Box<dyn common_arrow::arrow::array::Array>,
+        validity: &Bitmap,
+    ) -> Box<dyn common_arrow::arrow::array::Array> {
+        // merge Struct validity with the inner fields validity
+        let validity = match arrow_array.validity() {
+            Some(inner_validity) => and(inner_validity, validity),
+            None => validity.clone(),
+        };
+
+        match arrow_array.data_type() {
+            ArrowType::Null => arrow_array.clone(),
+            ArrowType::Extension(_, t, _) if **t == ArrowType::Null => arrow_array.clone(),
+            ArrowType::Struct(_) => {
+                let struct_array = arrow_array
+                    .as_any()
+                    .downcast_ref::<common_arrow::arrow::array::StructArray>()
+                    .expect("fail to read from arrow: array should be `StructArray`");
+                let fields = struct_array
+                    .values()
+                    .iter()
+                    .map(|array| {
+                        let array = Self::set_validity(array.clone(), &validity);
+                        array.clone()
+                    })
+                    .collect::<Vec<_>>();
+                Box::new(
+                    common_arrow::arrow::array::StructArray::try_new(
+                        arrow_array.data_type().clone(),
+                        fields,
+                        Some(validity),
+                    )
+                    .unwrap(),
+                )
+            }
+            _ => arrow_array.with_validity(Some(validity)),
         }
     }
 

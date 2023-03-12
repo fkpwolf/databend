@@ -12,17 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_exception::Span;
+use common_io::display_decimal_128;
+use common_io::display_decimal_256;
+use ethnum::i256;
 
+use super::OrderByExpr;
 use crate::ast::write_comma_separated_list;
 use crate::ast::write_period_separated_list;
 use crate::ast::Identifier;
 use crate::ast::Query;
+use crate::ErrorKind;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum IntervalKind {
@@ -141,7 +147,7 @@ pub enum Expr {
     CountAll { span: Span },
     /// `(foo, bar)`
     Tuple { span: Span, exprs: Vec<Expr> },
-    /// Scalar function call
+    /// Scalar/Agg/Window function call
     FunctionCall {
         span: Span,
         /// Set to true if the function is aggregate function with `DISTINCT`, like `COUNT(DISTINCT a)`
@@ -149,6 +155,7 @@ pub enum Expr {
         name: Identifier,
         args: Vec<Expr>,
         params: Vec<Literal>,
+        window: Option<WindowSpec>,
     },
     /// `CASE ... WHEN ... ELSE ...` expression
     Case {
@@ -221,14 +228,171 @@ pub enum SubqueryModifier {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
-    Integer(u64),
+    UInt64(u64),
+    Int64(i64),
+    Decimal128 {
+        value: i128,
+        precision: u8,
+        scale: u8,
+    },
+    Decimal256 {
+        value: i256,
+        precision: u8,
+        scale: u8,
+    },
     Float(f64),
-    BigInt { lit: String, is_hex: bool },
     // Quoted string literal value
     String(String),
     Boolean(bool),
     CurrentTimestamp,
     Null,
+}
+
+impl Literal {
+    pub(crate) fn neg(&self) -> Self {
+        match self {
+            Literal::UInt64(u) => match u.cmp(&(i64::MAX as u64 + 1)) {
+                Ordering::Greater => Literal::Decimal128 {
+                    value: -(*u as i128),
+                    precision: 19,
+                    scale: 0,
+                },
+                Ordering::Less => Literal::Int64(-(*u as i64)),
+                Ordering::Equal => Literal::Int64(i64::MIN),
+            },
+            Literal::Float(f) => Literal::Float(-*f),
+            Literal::Decimal128 {
+                value,
+                precision,
+                scale,
+            } => Literal::Decimal128 {
+                value: -*value,
+                precision: *precision,
+                scale: *scale,
+            },
+            Literal::Decimal256 {
+                value,
+                precision,
+                scale,
+            } => Literal::Decimal256 {
+                value: -*value,
+                precision: *precision,
+                scale: *scale,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    /// assume text is from
+    /// used only for expr, so put more weight on readability
+    pub fn parse_decimal(text: &str) -> std::result::Result<Self, ErrorKind> {
+        let mut start = 0;
+        let bytes = text.as_bytes();
+        while bytes[start] == b'0' {
+            start += 1
+        }
+        let text = &text[start..];
+        let point_pos = text.find('.');
+        let e_pos = text.find(|c| c == 'e' || c == 'E');
+        let (i_part, f_part, e_part) = match (point_pos, e_pos) {
+            (Some(p1), Some(p2)) => (&text[..p1], &text[(p1 + 1)..p2], Some(&text[(p2 + 1)..])),
+            (Some(p), None) => (&text[..p], &text[(p + 1)..], None),
+            (None, Some(p)) => (&text[..p], "", Some(&text[(p + 1)..])),
+            _ => {
+                unreachable!()
+            }
+        };
+        let exp = match e_part {
+            Some(s) => match s.parse::<i32>() {
+                Ok(i) => i,
+                Err(_) => return Ok(Literal::Float(fast_float::parse(text)?)),
+            },
+            None => 0,
+        };
+        if i_part.len() as i32 + exp > 76 {
+            Ok(Literal::Float(fast_float::parse(text)?))
+        } else {
+            let mut digits = Vec::with_capacity(76);
+            digits.extend_from_slice(i_part.as_bytes());
+            digits.extend_from_slice(f_part.as_bytes());
+            if digits.is_empty() {
+                digits.push(b'0')
+            }
+            let mut scale = f_part.len() as i32 - exp;
+            if scale < 0 {
+                // e.g 123.1e3
+                for _ in 0..(-scale) {
+                    digits.push(b'0')
+                }
+                scale = 0;
+            };
+
+            // truncate
+            if digits.len() > 76 {
+                scale -= digits.len() as i32 - 76;
+            }
+            let precision = std::cmp::min(digits.len(), 76);
+            let digits = unsafe { std::str::from_utf8_unchecked(&digits[..precision]) };
+
+            let scale = scale as u8;
+            let precision = std::cmp::max(precision as u8, scale);
+            if precision > 38 {
+                Ok(Literal::Decimal256 {
+                    value: i256::from_str_radix(digits, 10)?,
+                    precision,
+                    scale,
+                })
+            } else {
+                Ok(Literal::Decimal128 {
+                    value: digits.parse::<i128>()?,
+                    precision,
+                    scale,
+                })
+            }
+        }
+    }
+
+    pub fn parse_decimal_uint(text: &str) -> std::result::Result<Self, ErrorKind> {
+        let mut start = 0;
+        let bytes = text.as_bytes();
+        while start < bytes.len() && bytes[start] == b'0' {
+            start += 1
+        }
+        let text = &text[start..];
+        if text.is_empty() {
+            return Ok(Literal::UInt64(0));
+        }
+        let precision = text.len() as u8;
+        match precision {
+            0..=19 => Ok(Literal::UInt64(text.parse::<u64>()?)),
+            20 => {
+                if text <= "18446744073709551615" {
+                    Ok(Literal::UInt64(text.parse::<u64>()?))
+                } else {
+                    Ok(Literal::Decimal128 {
+                        value: text.parse::<i128>()?,
+                        precision,
+                        scale: 0,
+                    })
+                }
+            }
+            21..=38 => Ok(Literal::Decimal128 {
+                value: text.parse::<i128>()?,
+                precision,
+                scale: 0,
+            }),
+            39..=76 => Ok(Literal::Decimal256 {
+                value: i256::from_str_radix(text, 10)?,
+                precision,
+                scale: 0,
+            }),
+            _ => {
+                // lost precision
+                // 2.2250738585072014 E - 308 to 1.7976931348623158 E + 308
+                Ok(Literal::Float(fast_float::parse(text)?))
+            }
+        }
+    }
 }
 
 /// The display style for a map access expression
@@ -294,6 +458,38 @@ pub enum TrimWhere {
     Trailing,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowSpec {
+    pub partition_by: Vec<Expr>,
+    pub order_by: Vec<OrderByExpr>,
+    pub window_frame: Option<WindowFrame>,
+}
+
+/// `RANGE UNBOUNDED PRECEDING` or `ROWS BETWEEN 5 PRECEDING AND CURRENT ROW`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowFrame {
+    pub units: WindowFrameUnits,
+    pub start_bound: WindowFrameBound,
+    pub end_bound: WindowFrameBound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowFrameUnits {
+    Rows,
+    Range,
+}
+
+/// Specifies [WindowFrame]'s `start_bound` and `end_bound`
+#[derive(Debug, Clone, PartialEq)]
+pub enum WindowFrameBound {
+    /// `CURRENT ROW`
+    CurrentRow,
+    /// `<N> PRECEDING` or `UNBOUNDED PRECEDING`
+    Preceding(Option<Box<Expr>>),
+    /// `<N> FOLLOWING` or `UNBOUNDED FOLLOWING`.
+    Following(Option<Box<Expr>>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinaryOperator {
     Plus,
@@ -313,6 +509,7 @@ pub enum BinaryOperator {
     Lte,
     Eq,
     NotEq,
+    Caret,
     And,
     Or,
     Xor,
@@ -486,6 +683,9 @@ impl Display for BinaryOperator {
             BinaryOperator::NotEq => {
                 write!(f, "<>")
             }
+            BinaryOperator::Caret => {
+                write!(f, "^")
+            }
             BinaryOperator::And => {
                 write!(f, "AND")
             }
@@ -520,7 +720,7 @@ impl Display for BinaryOperator {
                 write!(f, "&")
             }
             BinaryOperator::BitwiseXor => {
-                write!(f, "^")
+                write!(f, "#")
             }
         }
     }
@@ -632,17 +832,20 @@ impl Display for TrimWhere {
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Integer(val) => {
+            Literal::UInt64(val) => {
                 write!(f, "{val}")
+            }
+            Literal::Int64(val) => {
+                write!(f, "{val}")
+            }
+            Literal::Decimal128 { value, scale, .. } => {
+                write!(f, "{}", display_decimal_128(*value, *scale))
+            }
+            Literal::Decimal256 { value, scale, .. } => {
+                write!(f, "{}", display_decimal_256(*value, *scale))
             }
             Literal::Float(val) => {
                 write!(f, "{val}")
-            }
-            Literal::BigInt { lit, is_hex } => {
-                if *is_hex {
-                    write!(f, "0x")?;
-                }
-                write!(f, "{lit}")
             }
             Literal::String(val) => {
                 write!(f, "\'{val}\'")
@@ -661,6 +864,73 @@ impl Display for Literal {
                 write!(f, "NULL")
             }
         }
+    }
+}
+
+impl Display for WindowSpec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        if !self.partition_by.is_empty() {
+            first = false;
+            write!(f, "PARTITION BY ")?;
+            for (i, p) in self.partition_by.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{p}")?;
+            }
+        }
+
+        if !self.order_by.is_empty() {
+            if !first {
+                write!(f, " ")?;
+            }
+            first = false;
+            write!(f, "ORDER BY ")?;
+            for (i, o) in self.order_by.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{o}")?;
+            }
+        }
+
+        if let Some(frame) = &self.window_frame {
+            if !first {
+                write!(f, " ")?;
+            }
+            match frame.units {
+                WindowFrameUnits::Rows => {
+                    write!(f, "ROWS")?;
+                }
+                WindowFrameUnits::Range => {
+                    write!(f, "RANGE")?;
+                }
+            }
+            match (&frame.start_bound, &frame.end_bound) {
+                (WindowFrameBound::CurrentRow, WindowFrameBound::CurrentRow) => {
+                    write!(f, " CURRENT ROW")?
+                }
+                _ => {
+                    let format_frame = |frame: &WindowFrameBound| -> String {
+                        match frame {
+                            WindowFrameBound::CurrentRow => "CURRENT ROW".to_string(),
+                            WindowFrameBound::Preceding(None) => "UNBOUNDED PRECEDING".to_string(),
+                            WindowFrameBound::Following(None) => "UNBOUNDED FOLLOWING".to_string(),
+                            WindowFrameBound::Preceding(Some(n)) => format!("{} PRECEDING", n),
+                            WindowFrameBound::Following(Some(n)) => format!("{} FOLLOWING", n),
+                        }
+                    };
+                    write!(
+                        f,
+                        " BETWEEN {} AND {}",
+                        format_frame(&frame.start_bound),
+                        format_frame(&frame.end_bound)
+                    )?
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -812,6 +1082,7 @@ impl Display for Expr {
                 name,
                 args,
                 params,
+                window,
                 ..
             } => {
                 write!(f, "{name}")?;
@@ -826,6 +1097,10 @@ impl Display for Expr {
                 }
                 write_comma_separated_list(f, args)?;
                 write!(f, ")")?;
+
+                if let Some(window) = window {
+                    write!(f, " OVER ({window})")?;
+                }
             }
             Expr::Case {
                 operand,

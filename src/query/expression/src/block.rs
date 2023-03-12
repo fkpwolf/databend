@@ -330,6 +330,11 @@ impl DataBlock {
         self.meta.as_ref()
     }
 
+    #[inline]
+    pub fn get_owned_meta(self) -> Option<BlockMetaInfoPtr> {
+        self.meta
+    }
+
     pub fn from_arrow_chunk<A: AsRef<dyn Array>>(
         arrow_chunk: &ArrowChunk<A>,
         schema: &DataSchema,
@@ -486,7 +491,7 @@ impl TryFrom<DataBlock> for ArrowChunk<ArrayRef> {
 impl BlockEntry {
     pub fn memory_size(&self) -> usize {
         match &self.value {
-            Value::Scalar(s) => std::mem::size_of_val(&s),
+            Value::Scalar(s) => std::mem::size_of_val(s),
             Value::Column(c) => c.memory_size(),
         }
     }

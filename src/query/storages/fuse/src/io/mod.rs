@@ -14,6 +14,7 @@
 
 mod files;
 mod locations;
+mod parallel;
 mod read;
 mod segments;
 mod snapshots;
@@ -21,6 +22,7 @@ mod write;
 
 pub use files::Files;
 pub use locations::TableMetaLocationGenerator;
+pub use parallel::execute_futures_in_parallel;
 pub use read::BlockReader;
 pub use read::BloomBlockFilterReader;
 pub use read::MergeIOReadResult;
@@ -31,14 +33,14 @@ pub use read::SegmentInfoReader;
 pub use read::SnapshotHistoryReader;
 pub use read::TableSnapshotReader;
 pub use read::UncompressedBuffer;
-pub use segments::try_join_futures;
-pub use segments::try_join_futures_with_vec;
 pub use segments::SegmentsIO;
 pub use snapshots::ListSnapshotLiteOption;
 pub use snapshots::SnapshotLiteListExtended;
 pub use snapshots::SnapshotsIO;
-pub use write::write_block;
+pub use write::serialize_block;
 pub use write::write_data;
+pub use write::BlockBuilder;
+pub use write::BlockSerialization;
 pub use write::CachedMetaWriter;
 pub use write::MetaWriter;
 pub use write::SegmentWriter;

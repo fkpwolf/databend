@@ -25,13 +25,17 @@ use crate::expression::Literal;
 use crate::expression::RawExpr;
 use crate::function::FunctionRegistry;
 use crate::function::FunctionSignature;
+use crate::types::decimal::DecimalScalar;
 use crate::types::decimal::DecimalSize;
 use crate::types::number::NumberDataType;
 use crate::types::number::NumberScalar;
 use crate::types::DataType;
 use crate::types::DecimalDataType;
+use crate::types::Number;
 use crate::AutoCastRules;
 use crate::ColumnIndex;
+use crate::ConstantFolder;
+use crate::FunctionContext;
 use crate::Scalar;
 
 pub fn check<Index: ColumnIndex>(
@@ -117,6 +121,34 @@ pub fn check_literal(literal: &Literal) -> (Scalar, DataType) {
             Scalar::Number(NumberScalar::Int64(*v)),
             DataType::Number(NumberDataType::Int64),
         ),
+        Literal::Decimal128 {
+            value,
+            precision,
+            scale,
+        } => {
+            let size = DecimalSize {
+                precision: *precision,
+                scale: *scale,
+            };
+            (
+                Scalar::Decimal(DecimalScalar::Decimal128(*value, size)),
+                DataType::Decimal(DecimalDataType::Decimal128(size)),
+            )
+        }
+        Literal::Decimal256 {
+            value,
+            precision,
+            scale,
+        } => {
+            let size = DecimalSize {
+                precision: *precision,
+                scale: *scale,
+            };
+            (
+                Scalar::Decimal(DecimalScalar::Decimal256(*value, size)),
+                DataType::Decimal(DecimalDataType::Decimal256(size)),
+            )
+        }
         Literal::Float32(v) => (
             Scalar::Number(NumberScalar::Float32(*v)),
             DataType::Number(NumberDataType::Float32),
@@ -196,6 +228,34 @@ fn wrap_nullable_for_try_cast(span: Span, ty: &DataType) -> Result<DataType> {
                 .collect::<Result<Vec<_>>>()?,
         )))),
         _ => Ok(DataType::Nullable(Box::new(ty.clone()))),
+    }
+}
+
+pub fn check_number<Index: ColumnIndex, T: Number>(
+    span: Span,
+    func_ctx: FunctionContext,
+    expr: &Expr<Index>,
+    fn_registry: &FunctionRegistry,
+) -> Result<T> {
+    let (expr, _) = ConstantFolder::fold(expr, func_ctx, fn_registry);
+    match expr {
+        Expr::Constant {
+            scalar: Scalar::Number(num),
+            ..
+        } => T::try_downcast_scalar(&num).ok_or_else(|| {
+            ErrorCode::InvalidArgument(format!(
+                "Expect {}, but got {}",
+                T::data_type(),
+                expr.data_type()
+            ))
+            .set_span(span)
+        }),
+        _ => Err(ErrorCode::InvalidArgument(format!(
+            "Expect {}, but got {}",
+            T::data_type(),
+            expr.data_type()
+        ))
+        .set_span(span)),
     }
 }
 
@@ -358,6 +418,7 @@ pub fn try_check_function<Index: ColumnIndex>(
         .collect::<Result<Vec<_>>>()?;
 
     let return_type = subst.apply(&sig.return_type)?;
+    assert!(!return_type.has_nested_nullable());
 
     let generics = subst
         .0
@@ -487,8 +548,11 @@ pub fn can_auto_cast_to(
                 .zip(dest_tys)
                 .all(|(src_ty, dest_ty)| can_auto_cast_to(src_ty, dest_ty, auto_cast_rules))
         }
-        (DataType::Number(_), DataType::Decimal(_)) => true,
+        (DataType::Number(n), DataType::Decimal(_)) if !n.is_float() => true,
+        (DataType::String, DataType::Decimal(_)) => true,
         (DataType::Decimal(x), DataType::Decimal(y)) => x.precision() <= y.precision(),
+        (DataType::Decimal(_), DataType::Number(NumberDataType::Float32)) => true,
+        (DataType::Decimal(_), DataType::Number(NumberDataType::Float64)) => true,
         _ => false,
     }
 }

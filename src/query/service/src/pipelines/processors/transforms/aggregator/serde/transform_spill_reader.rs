@@ -30,6 +30,7 @@ use common_pipeline_core::processors::processor::ProcessorPtr;
 use common_pipeline_core::processors::Processor;
 use itertools::Itertools;
 use opendal::Operator;
+use tracing::error;
 use tracing::info;
 
 use crate::pipelines::processors::transforms::aggregator::aggregate_meta::AggregateMeta;
@@ -173,36 +174,48 @@ impl<Method: HashMethodBounds, V: Send + Sync + 'static> Processor
                 AggregateMeta::HashTable(_) => unreachable!(),
                 AggregateMeta::Serialized(_) => unreachable!(),
                 AggregateMeta::Spilled(payload) => {
-                    // TODO: need retry read
                     let instant = Instant::now();
-                    let object = self.operator.object(&payload.location);
-                    let data = object.read().await?;
+                    let data = self.operator.read(&payload.location).await?;
+
+                    if let Err(cause) = self.operator.delete(&payload.location).await {
+                        error!(
+                            "Cannot delete spill file {}, cause: {:?}",
+                            &payload.location, cause
+                        );
+                    }
+
                     info!(
                         "Read aggregate spill {} successfully, elapsed: {:?}",
                         &payload.location,
                         instant.elapsed()
                     );
-                    // TODO: can remove this location
+
                     self.deserializing_meta = Some((block_meta, VecDeque::from(vec![data])));
                 }
                 AggregateMeta::Partitioned { data, .. } => {
                     let mut read_data = Vec::with_capacity(data.len());
                     for meta in data {
-                        // TODO: need retry read
                         if let AggregateMeta::Spilled(payload) = meta {
                             let location = payload.location.clone();
                             let operator = self.operator.clone();
                             read_data.push(common_base::base::tokio::spawn(async move {
                                 let instant = Instant::now();
-                                let object = operator.object(&location);
-                                let data = object.read().await?;
+                                let data = operator.read(&location).await?;
+
+                                if let Err(cause) = operator.delete(&location).await {
+                                    error!(
+                                        "Cannot delete spill file {}, cause: {:?}",
+                                        location, cause
+                                    );
+                                }
+
                                 info!(
                                     "Read aggregate spill {} successfully, elapsed: {:?}",
                                     location,
                                     instant.elapsed()
                                 );
+
                                 Ok(data)
-                                // TODO: can remove this location
                             }));
                         }
                     }

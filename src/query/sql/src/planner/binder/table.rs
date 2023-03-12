@@ -47,7 +47,7 @@ use common_expression::ConstantFolder;
 use common_expression::Scalar;
 use common_functions::scalars::BUILTIN_FUNCTIONS;
 use common_meta_app::principal::StageFileFormatType;
-use common_meta_app::principal::UserStageInfo;
+use common_meta_app::principal::StageInfo;
 use common_storage::DataOperator;
 use common_storage::StageFilesInfo;
 use common_storages_parquet::ParquetTable;
@@ -129,7 +129,8 @@ impl Binder {
                 alias,
                 travel_point,
             } => {
-                let table_name = normalize_identifier(table, &self.name_resolution_ctx).name;
+                let (catalog, database, table_name) =
+                    self.normalize_object_identifier_triple(catalog, database, table);
                 let table_alias_name = if let Some(table_alias) = alias {
                     Some(normalize_identifier(&table_alias.name, &self.name_resolution_ctx).name)
                 } else {
@@ -139,17 +140,10 @@ impl Binder {
                 if let Some(cte_info) = bind_context.ctes_map.get(&table_name) {
                     return self.bind_cte(bind_context, &table_name, alias, &cte_info);
                 }
-                // Get catalog name
-                let catalog = catalog
-                    .as_ref()
-                    .map(|ident| normalize_identifier(ident, &self.name_resolution_ctx).name)
-                    .unwrap_or_else(|| self.ctx.get_current_catalog());
 
-                // Get database name
-                let database = database
-                    .as_ref()
-                    .map(|ident| normalize_identifier(ident, &self.name_resolution_ctx).name)
-                    .unwrap_or_else(|| self.ctx.get_current_database());
+                if database == "system" {
+                    self.ctx.set_cacheable(false);
+                }
 
                 let tenant = self.ctx.get_tenant();
 
@@ -356,7 +350,7 @@ impl Binder {
                 options,
                 alias,
             } => {
-                let (user_stage_info, path) = match location.clone() {
+                let (stage_info, path) = match location.clone() {
                     FileLocation::Stage(location) => {
                         parse_stage_location_v2(&self.ctx, &location.name, &location.path).await?
                     }
@@ -371,14 +365,14 @@ impl Binder {
                                 "copy from insecure storage is not allowed",
                             ));
                         }
-                        let stage_info = UserStageInfo::new_external_stage(storage_params, &path);
+                        let stage_info = StageInfo::new_external_stage(storage_params, &path);
                         (stage_info, path)
                     }
                 };
 
                 let file_format_options = match &options.file_format {
                     Some(f) => self.ctx.get_file_format(f).await?,
-                    None => user_stage_info.file_format_options.clone(),
+                    None => stage_info.file_format_options.clone(),
                 };
                 if matches!(file_format_options.format, StageFileFormatType::Parquet) {
                     let files_info = StageFilesInfo {
@@ -389,8 +383,7 @@ impl Binder {
                     let read_options = ParquetReadOptions::default();
 
                     let table =
-                        ParquetTable::create(user_stage_info.clone(), files_info, read_options)
-                            .await?;
+                        ParquetTable::create(stage_info.clone(), files_info, read_options).await?;
 
                     let table_alias_name = if let Some(table_alias) = alias {
                         Some(

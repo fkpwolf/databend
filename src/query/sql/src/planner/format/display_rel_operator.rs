@@ -15,7 +15,6 @@
 use std::fmt::Display;
 
 use common_ast::ast::FormatTreeNode;
-use common_expression::types::DataType;
 use itertools::Itertools;
 
 use crate::optimizer::SExpr;
@@ -78,6 +77,7 @@ impl Display for FormatContext {
                 RelOperator::UnionAll(_) => write!(f, "Union"),
                 RelOperator::Pattern(_) => write!(f, "Pattern"),
                 RelOperator::DummyTableScan(_) => write!(f, "DummyTableScan"),
+                RelOperator::RuntimeFilterSource(_) => write!(f, "RuntimeFilterSource"),
             },
             Self::Text(text) => write!(f, "{}", text),
         }
@@ -363,7 +363,6 @@ pub fn logical_join_to_format_tree(
                 op: ComparisonOp::Equal,
                 left: Box::new(left.clone()),
                 right: Box::new(right.clone()),
-                return_type: Box::new(DataType::Boolean),
             }
             .into()
         })
@@ -379,7 +378,6 @@ pub fn logical_join_to_format_tree(
             ScalarExpr::AndExpr(AndExpr {
                 left: Box::new(prev),
                 right: Box::new(next.clone()),
-                return_type: Box::new(DataType::Boolean),
             })
         });
         format_scalar(&metadata, &pred)

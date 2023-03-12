@@ -93,7 +93,8 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expr: &'a Expr) {
             name,
             args,
             params,
-        } => visitor.visit_function_call(*span, *distinct, name, args, params),
+            window,
+        } => visitor.visit_function_call(*span, *distinct, name, args, params, window),
         Expr::Case {
             span,
             operand,
@@ -303,6 +304,7 @@ pub fn walk_statement<'a, V: Visitor<'a>>(visitor: &mut V, statement: &'a Statem
         Statement::ExplainAnalyze { query } => visitor.visit_statement(query),
         Statement::Query(query) => visitor.visit_query(query),
         Statement::Insert(insert) => visitor.visit_insert(insert),
+        Statement::Replace(replace) => visitor.visit_replace(replace),
         Statement::Delete {
             table_reference,
             selection,
@@ -315,6 +317,7 @@ pub fn walk_statement<'a, V: Visitor<'a>>(visitor: &mut V, statement: &'a Statem
         Statement::ShowMetrics => visitor.visit_show_metrics(),
         Statement::ShowEngines => visitor.visit_show_engines(),
         Statement::ShowFunctions { limit } => visitor.visit_show_functions(limit),
+        Statement::ShowTableFunctions { limit } => visitor.visit_show_table_functions(limit),
         Statement::KillStmt {
             kill_target,
             object_id,

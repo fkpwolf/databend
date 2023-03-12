@@ -52,7 +52,7 @@ use common_formats::FastFieldDecoderValues;
 use common_io::cursor_ext::ReadBytesExt;
 use common_io::cursor_ext::ReadCheckPointExt;
 use common_meta_app::principal::FileFormatOptions;
-use common_meta_app::principal::UserStageInfo;
+use common_meta_app::principal::StageInfo;
 use common_pipeline_core::Pipeline;
 use common_pipeline_sources::AsyncSource;
 use common_pipeline_sources::AsyncSourcer;
@@ -132,7 +132,7 @@ impl InsertInterpreter {
 
     async fn try_purge_files(
         ctx: Arc<QueryContext>,
-        stage_info: &UserStageInfo,
+        stage_info: &StageInfo,
         stage_files: &[StageFileInfo],
     ) {
         let table_ctx: Arc<dyn TableContext> = ctx.clone();
@@ -230,7 +230,7 @@ impl InsertInterpreter {
         let attachment_table_schema = infer_table_schema(&attachment_data_schema)?;
         let mut stage_table_info = StageTableInfo {
             schema: attachment_table_schema,
-            user_stage_info: stage_info,
+            stage_info,
             path: path.to_string(),
             files: vec![],
             pattern: "".to_string(),
@@ -280,13 +280,13 @@ impl InsertInterpreter {
 
         table.append_data(ctx.clone(), pipeline, AppendMode::Copy, false)?;
 
-        let user_stage_info_clone = stage_table_info.user_stage_info.clone();
+        let stage_info_clone = stage_table_info.stage_info.clone();
         pipeline.set_on_finished(move |may_error| {
             // capture out variable
             let overwrite = overwrite;
             let ctx = ctx.clone();
             let table = table.clone();
-            let stage_info = user_stage_info_clone.clone();
+            let stage_info = stage_info_clone.clone();
             let all_source_files = all_source_files.clone();
 
             match may_error {
@@ -586,7 +586,7 @@ impl ValueSource {
             .schema
             .fields()
             .iter()
-            .map(|f| f.data_type().create_deserializer(estimated_rows))
+            .map(|f| TypeDeserializerImpl::with_capacity(f.data_type(), estimated_rows))
             .collect::<Vec<_>>();
 
         let mut rows = 0;
@@ -785,16 +785,12 @@ async fn fill_default_value(
         let tokens = tokenize_sql(default_expr)?;
         let backtrace = Backtrace::new();
         let ast = parse_expr(&tokens, Dialect::PostgreSQL, &backtrace)?;
-        let (mut scalar, ty) = binder.bind(&ast).await?;
-
-        if !field.data_type().eq(&ty) {
-            scalar = ScalarExpr::CastExpr(CastExpr {
-                is_try: false,
-                argument: Box::new(scalar),
-                from_type: Box::new(ty),
-                target_type: Box::new(field.data_type().clone()),
-            })
-        }
+        let (mut scalar, _) = binder.bind(&ast).await?;
+        scalar = ScalarExpr::CastExpr(CastExpr {
+            is_try: false,
+            argument: Box::new(scalar),
+            target_type: Box::new(field.data_type().clone()),
+        });
 
         let expr = scalar
             .as_expr_with_col_index()?
@@ -811,7 +807,7 @@ async fn fill_default_value(
             map_exprs.push(expr);
         } else {
             let data_type = field.data_type().clone();
-            let default_value = data_type.default_value();
+            let default_value = DataScalar::default_value(&data_type);
             let expr = Expr::Constant {
                 span: None,
                 scalar: default_value,
@@ -858,16 +854,13 @@ async fn exprs_to_scalar(
             }
         }
 
-        let (mut scalar, data_type) = scalar_binder.bind(expr).await?;
+        let (mut scalar, _) = scalar_binder.bind(expr).await?;
         let field_data_type = schema.field(i).data_type();
-        if &data_type != field_data_type {
-            scalar = ScalarExpr::CastExpr(CastExpr {
-                is_try: false,
-                argument: Box::new(scalar),
-                from_type: Box::new(data_type),
-                target_type: Box::new(field_data_type.clone()),
-            })
-        }
+        scalar = ScalarExpr::CastExpr(CastExpr {
+            is_try: false,
+            argument: Box::new(scalar),
+            target_type: Box::new(field_data_type.clone()),
+        });
         let expr = scalar
             .as_expr_with_col_index()?
             .project_column_ref(|index| schema.index_of(&index.to_string()).unwrap());
@@ -904,13 +897,13 @@ async fn exprs_to_scalar(
 async fn parse_stage_location(
     ctx: &Arc<QueryContext>,
     location: &str,
-) -> Result<(UserStageInfo, String)> {
+) -> Result<(StageInfo, String)> {
     let s: Vec<&str> = location.split('@').collect();
     // @my_ext_stage/abc/
     let names: Vec<&str> = s[1].splitn(2, '/').filter(|v| !v.is_empty()).collect();
 
     let stage = if names[0] == "~" {
-        UserStageInfo::new_user_stage(&ctx.get_current_user()?.name)
+        StageInfo::new_user_stage(&ctx.get_current_user()?.name)
     } else {
         UserApiProvider::instance()
             .get_stage(&ctx.get_tenant(), names[0])

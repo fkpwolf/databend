@@ -208,9 +208,32 @@ pub trait VisitorMut: Sized {
         _name: &mut Identifier,
         args: &mut [Expr],
         _params: &mut [Literal],
+        over: &mut Option<WindowSpec>,
     ) {
         for arg in args.iter_mut() {
             walk_expr_mut(self, arg);
+        }
+
+        if let Some(over) = over {
+            over.partition_by
+                .iter_mut()
+                .for_each(|expr| walk_expr_mut(self, expr));
+            over.order_by
+                .iter_mut()
+                .for_each(|expr| walk_expr_mut(self, &mut expr.expr));
+
+            if let Some(frame) = &mut over.window_frame {
+                self.visit_frame_bound(&mut frame.start_bound);
+                self.visit_frame_bound(&mut frame.end_bound);
+            }
+        }
+    }
+
+    fn visit_frame_bound(&mut self, bound: &mut WindowFrameBound) {
+        match bound {
+            WindowFrameBound::Preceding(Some(expr)) => walk_expr_mut(self, expr.as_mut()),
+            WindowFrameBound::Following(Some(expr)) => walk_expr_mut(self, expr.as_mut()),
+            _ => {}
         }
     }
 
@@ -331,6 +354,8 @@ pub trait VisitorMut: Sized {
 
     fn visit_show_functions(&mut self, _limit: &mut Option<ShowLimit>) {}
 
+    fn visit_show_table_functions(&mut self, _limit: &mut Option<ShowLimit>) {}
+
     fn visit_show_limit(&mut self, _limit: &mut ShowLimit) {}
 
     fn visit_kill(&mut self, _kill_target: &mut KillTarget, _object_id: &mut String) {}
@@ -348,6 +373,7 @@ pub trait VisitorMut: Sized {
     fn visit_set_role(&mut self, _is_default: bool, _role_name: &mut String) {}
 
     fn visit_insert(&mut self, _insert: &mut InsertStmt) {}
+    fn visit_replace(&mut self, _replace: &mut ReplaceStmt) {}
 
     fn visit_insert_source(&mut self, _insert_source: &mut InsertSource) {}
 

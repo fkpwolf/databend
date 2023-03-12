@@ -26,11 +26,11 @@ use common_arrow::arrow::datatypes::Schema as ArrowSchema;
 use common_arrow::arrow::datatypes::TimeUnit;
 use common_exception::ErrorCode;
 use common_exception::Result;
-use common_jsonb::Number as JsonbNumber;
-use common_jsonb::Object as JsonbObject;
-use common_jsonb::Value as JsonbValue;
 use ethnum::i256;
 use itertools::Itertools;
+use jsonb::Number as JsonbNumber;
+use jsonb::Object as JsonbObject;
+use jsonb::Value as JsonbValue;
 use rand::distributions::Alphanumeric;
 use rand::distributions::DistString;
 use rand::rngs::SmallRng;
@@ -195,7 +195,9 @@ impl DataSchema {
 
     /// Find the index of the column with the given name.
     pub fn index_of(&self, name: &str) -> Result<FieldIndex> {
-        for i in 0..self.fields.len() {
+        for i in (0..self.fields.len()).rev() {
+            // Use `rev` is because unnest columns will be attached to end of schema,
+            // but their names are the same as the original column.
             if self.fields[i].name() == name {
                 return Ok(i);
             }
@@ -256,7 +258,10 @@ impl DataSchema {
     pub fn create_deserializers(&self, capacity: usize) -> Vec<TypeDeserializerImpl> {
         let mut deserializers = Vec::with_capacity(self.num_fields());
         for field in self.fields() {
-            deserializers.push(field.data_type.create_deserializer(capacity));
+            deserializers.push(TypeDeserializerImpl::with_capacity(
+                &field.data_type,
+                capacity,
+            ));
         }
         deserializers
     }
@@ -730,7 +735,7 @@ impl TableSchema {
         let mut deserializers = Vec::with_capacity(self.num_fields());
         for field in self.fields() {
             let data_type: DataType = field.data_type().into();
-            deserializers.push(data_type.create_deserializer(capacity));
+            deserializers.push(TypeDeserializerImpl::with_capacity(&data_type, capacity));
         }
         deserializers
     }
@@ -807,8 +812,7 @@ impl TableField {
         next_column_id: &mut ColumnId,
     ) {
         column_ids.push(*next_column_id);
-
-        match data_type {
+        match data_type.remove_nullable() {
             TableDataType::Tuple {
                 fields_name: _,
                 ref fields_type,
@@ -1362,14 +1366,43 @@ impl From<&ArrowField> for TableDataType {
 impl From<&DataField> for ArrowField {
     fn from(f: &DataField) -> Self {
         let ty = f.data_type().into();
-        ArrowField::new(f.name(), ty, f.is_nullable())
+        match ty {
+            ArrowDataType::Struct(_) if f.is_nullable() => {
+                let ty = set_nullable(&ty);
+                ArrowField::new(f.name(), ty, f.is_nullable())
+            }
+            _ => ArrowField::new(f.name(), ty, f.is_nullable()),
+        }
     }
 }
 
 impl From<&TableField> for ArrowField {
     fn from(f: &TableField) -> Self {
         let ty = f.data_type().into();
-        ArrowField::new(f.name(), ty, f.is_nullable())
+        match ty {
+            ArrowDataType::Struct(_) if f.is_nullable() => {
+                let ty = set_nullable(&ty);
+                ArrowField::new(f.name(), ty, f.is_nullable())
+            }
+            _ => ArrowField::new(f.name(), ty, f.is_nullable()),
+        }
+    }
+}
+
+fn set_nullable(ty: &ArrowDataType) -> ArrowDataType {
+    // if the struct type is nullable, need to set inner fields as nullable
+    match ty {
+        ArrowDataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|f| {
+                    let data_type = set_nullable(&f.data_type);
+                    ArrowField::new(f.name.clone(), data_type, true)
+                })
+                .collect();
+            ArrowDataType::Struct(fields)
+        }
+        _ => ty.clone(),
     }
 }
 

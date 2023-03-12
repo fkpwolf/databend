@@ -20,15 +20,11 @@ use once_cell::sync::Lazy;
 
 use super::prune_unused_columns::UnusedColumnPruner;
 use crate::optimizer::heuristic::decorrelate::decorrelate_subquery;
-use crate::optimizer::heuristic::prewhere_optimization::PrewhereOptimizer;
-use crate::optimizer::rule::RulePtr;
 use crate::optimizer::rule::TransformResult;
 use crate::optimizer::ColumnSet;
+use crate::optimizer::RuleFactory;
 use crate::optimizer::RuleID;
 use crate::optimizer::SExpr;
-use crate::optimizer::RULE_FACTORY;
-use crate::plans::Operator;
-use crate::plans::RelOperator;
 use crate::BindContext;
 use crate::MetadataRef;
 
@@ -54,7 +50,8 @@ pub static DEFAULT_REWRITE_RULES: Lazy<Vec<RuleID>> = Lazy::new(|| {
         RuleID::FoldCountAggregate,
         RuleID::SplitAggregate,
         RuleID::PushDownFilterScan,
-        RuleID::PushDownSortScan,
+        RuleID::PushDownPrewhere, /* PushDownPrwhere should be after all rules except PushDownFilterScan */
+        RuleID::PushDownSortScan, // PushDownFilterScan should be after PushDownPrewhere
     ]
 });
 
@@ -93,9 +90,6 @@ impl HeuristicOptimizer {
     }
 
     fn post_optimize(&mut self, s_expr: SExpr) -> Result<SExpr> {
-        let prewhere_optimizer = PrewhereOptimizer::new(self.metadata.clone());
-        let s_expr = prewhere_optimizer.prewhere_optimize(s_expr)?;
-
         let pruner = UnusedColumnPruner::new(self.metadata.clone());
         let require_columns: ColumnSet =
             self.bind_context.columns.iter().map(|c| c.index).collect();
@@ -105,12 +99,6 @@ impl HeuristicOptimizer {
     pub fn optimize(&mut self, s_expr: SExpr) -> Result<SExpr> {
         let pre_optimized = self.pre_optimize(s_expr)?;
         let optimized = self.optimize_expression(&pre_optimized)?;
-        let post_optimized = self.post_optimize(optimized)?;
-
-        // do it again, some rules may be missed after the post_optimized
-        // for example: push down sort + limit (topn) to scan
-        // TODO: if we push down the filter to scan, we need to remove the filter plan
-        let optimized = self.optimize_expression(&post_optimized)?;
         let post_optimized = self.post_optimize(optimized)?;
 
         Ok(post_optimized)
@@ -127,27 +115,13 @@ impl HeuristicOptimizer {
         Ok(result)
     }
 
-    fn calc_operator_rule_set(&self, operator: &RelOperator) -> roaring::RoaringBitmap {
-        unsafe { operator.transformation_candidate_rules() & (&RULE_FACTORY.transformation_rules) }
-    }
-
-    fn get_rule(&self, rule_id: u32) -> Result<RulePtr> {
-        unsafe {
-            RULE_FACTORY.create_rule(
-                DEFAULT_REWRITE_RULES[rule_id as usize],
-                Some(self.metadata.clone()),
-            )
-        }
-    }
-
     /// Try to apply the rules to the expression.
     /// Return the final result that no rule can be applied.
     fn apply_transform_rules(&self, s_expr: &SExpr) -> Result<SExpr> {
         let mut s_expr = s_expr.clone();
-        let rule_set = self.calc_operator_rule_set(&s_expr.plan);
 
-        for rule_id in rule_set.iter() {
-            let rule = self.get_rule(rule_id)?;
+        for rule_id in DEFAULT_REWRITE_RULES.iter() {
+            let rule = RuleFactory::create_rule(*rule_id, self.metadata.clone())?;
             let mut state = TransformResult::new();
             if s_expr.match_pattern(rule.pattern()) && !s_expr.applied_rule(&rule.id()) {
                 s_expr.set_applied_rule(&rule.id());

@@ -207,9 +207,32 @@ pub trait Visitor<'ast>: Sized {
         _name: &'ast Identifier,
         args: &'ast [Expr],
         _params: &'ast [Literal],
+        over: &'ast Option<WindowSpec>,
     ) {
         for arg in args {
             walk_expr(self, arg);
+        }
+
+        if let Some(over) = over {
+            over.partition_by
+                .iter()
+                .for_each(|expr| walk_expr(self, expr));
+            over.order_by
+                .iter()
+                .for_each(|expr| walk_expr(self, &expr.expr));
+
+            if let Some(frame) = &over.window_frame {
+                self.visit_frame_bound(&frame.start_bound);
+                self.visit_frame_bound(&frame.end_bound);
+            }
+        }
+    }
+
+    fn visit_frame_bound(&mut self, bound: &'ast WindowFrameBound) {
+        match bound {
+            WindowFrameBound::Preceding(Some(expr)) => walk_expr(self, expr.as_ref()),
+            WindowFrameBound::Following(Some(expr)) => walk_expr(self, expr.as_ref()),
+            _ => {}
         }
     }
 
@@ -327,6 +350,8 @@ pub trait Visitor<'ast>: Sized {
 
     fn visit_show_functions(&mut self, _limit: &'ast Option<ShowLimit>) {}
 
+    fn visit_show_table_functions(&mut self, _limit: &'ast Option<ShowLimit>) {}
+
     fn visit_show_limit(&mut self, _limit: &'ast ShowLimit) {}
 
     fn visit_kill(&mut self, _kill_target: &'ast KillTarget, _object_id: &'ast str) {}
@@ -342,6 +367,7 @@ pub trait Visitor<'ast>: Sized {
     fn visit_set_role(&mut self, _is_default: bool, _role_name: &'ast str) {}
 
     fn visit_insert(&mut self, _insert: &'ast InsertStmt) {}
+    fn visit_replace(&mut self, _replace: &'ast ReplaceStmt) {}
 
     fn visit_insert_source(&mut self, _insert_source: &'ast InsertSource) {}
 

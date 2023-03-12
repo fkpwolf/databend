@@ -13,6 +13,7 @@
 //  limitations under the License.
 use std::any::Any;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,11 +167,11 @@ async fn test_last_snapshot_hint() -> Result<()> {
     let location = fuse_table
         .meta_location_generator()
         .gen_last_snapshot_hint_location();
-    let storage_meta_data = operator.metadata();
+    let storage_meta_data = operator.info();
     let storage_prefix = storage_meta_data.root();
 
     let expected = format!("{}{}", storage_prefix, last_snapshot_location);
-    let content = operator.object(location.as_str()).read().await?;
+    let content = operator.read(location.as_str()).await?;
 
     assert_eq!(content.as_slice(), expected.as_bytes());
 
@@ -224,7 +225,7 @@ async fn test_abort_on_error() -> Result<()> {
 
             let operator = fuse_table.get_operator();
             let table_data_prefix = fuse_table.meta_location_generator().prefix();
-            let storage_meta_data = operator.metadata();
+            let storage_meta_data = operator.info();
             let storage_prefix = storage_meta_data.root();
 
             let mut ss_count = 0;
@@ -364,6 +365,14 @@ impl TableContext for CtxDelegation {
         todo!()
     }
 
+    fn get_cacheable(&self) -> bool {
+        todo!()
+    }
+
+    fn set_cacheable(&self, _: bool) {
+        todo!()
+    }
+
     fn attach_query_str(&self, _kind: String, _query: &str) {
         todo!()
     }
@@ -445,6 +454,9 @@ impl TableContext for CtxDelegation {
     }
 
     fn get_last_query_id(&self, _index: i32) -> String {
+        todo!()
+    }
+    fn get_query_id_history(&self) -> HashSet<String> {
         todo!()
     }
     fn get_result_cache_key(&self, _query_id: &str) -> Option<String> {

@@ -31,7 +31,7 @@ use common_expression::TypeDeserializerImpl;
 use common_formats::FieldDecoder;
 use common_formats::FileFormatOptionsExt;
 use common_meta_app::principal::StageFileFormatType;
-use common_meta_app::principal::UserStageInfo;
+use common_meta_app::principal::StageInfo;
 use common_pipeline_core::Pipeline;
 use common_settings::Settings;
 use opendal::Operator;
@@ -288,14 +288,13 @@ impl<T: InputFormatTextBase> InputFormat for T {
     async fn get_splits(
         &self,
         files: &[String],
-        stage_info: &UserStageInfo,
+        stage_info: &StageInfo,
         op: &Operator,
         _settings: &Arc<Settings>,
     ) -> Result<Vec<Arc<SplitInfo>>> {
         let mut infos = vec![];
         for path in files {
-            let obj = op.object(path);
-            let size = obj.stat().await?.content_length() as usize;
+            let size = op.stat(path).await?.content_length() as usize;
             let compress_alg = InputContext::get_compression_alg_copy(
                 stage_info.file_format_options.compression,
                 path,

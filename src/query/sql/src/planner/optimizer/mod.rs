@@ -25,6 +25,7 @@ mod optimizer;
 mod pattern_extractor;
 mod property;
 mod rule;
+mod runtime_filter;
 mod s_expr;
 mod util;
 
@@ -42,5 +43,4 @@ pub use rule::try_push_down_filter_join;
 pub use rule::RuleFactory;
 pub use rule::RuleID;
 pub use rule::RuleSet;
-pub use rule::RULE_FACTORY;
 pub use s_expr::SExpr;

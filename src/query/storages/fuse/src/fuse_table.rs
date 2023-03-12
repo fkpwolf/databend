@@ -38,6 +38,7 @@ use common_expression::ColumnId;
 use common_expression::DataBlock;
 use common_expression::FieldIndex;
 use common_expression::RemoteExpr;
+use common_expression::TableField;
 use common_io::constants::DEFAULT_BLOCK_BUFFER_SIZE;
 use common_io::constants::DEFAULT_BLOCK_MAX_ROWS;
 use common_meta_app::schema::DatabaseType;
@@ -170,7 +171,7 @@ impl FuseTable {
     }
 
     pub fn get_write_settings(&self) -> WriteSettings {
-        let default_rows_per_page = if self.operator.metadata().can_blocking() {
+        let default_rows_per_page = if self.operator.info().can_blocking() {
             DEFAULT_ROW_PER_PAGE_FOR_BLOCKING
         } else {
             DEFAULT_ROW_PER_PAGE
@@ -273,7 +274,7 @@ impl FuseTable {
         match self.table_info.db_type {
             DatabaseType::ShareDB(_) => {
                 let url = FUSE_TBL_LAST_SNAPSHOT_HINT;
-                let data = self.operator.object(url).read().await?;
+                let data = self.operator.read(url).await?;
                 let s = str::from_utf8(&data)?;
                 Ok(Some(s.to_string()))
             }
@@ -484,6 +485,16 @@ impl Table for FuseTable {
         self.do_append_data(ctx, pipeline, append_mode, need_output)
     }
 
+    async fn replace_into(
+        &self,
+        ctx: Arc<dyn TableContext>,
+        pipeline: &mut Pipeline,
+        on_conflict_fields: Vec<TableField>,
+    ) -> Result<()> {
+        self.build_replace_pipeline(ctx, on_conflict_fields, pipeline)
+            .await
+    }
+
     #[tracing::instrument(level = "debug", name = "fuse_table_commit_insertion", skip(self, ctx, operations), fields(ctx.id = ctx.get_id().as_str()))]
     async fn commit_insertion(
         &self,
@@ -625,7 +636,7 @@ impl Table for FuseTable {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum FuseStorageFormat {
     Parquet,
     Native,

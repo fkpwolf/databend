@@ -148,7 +148,8 @@ pub fn transform_expr(ast: AExpr, columns: &[(&str, DataType)]) -> RawExpr {
             params: params
                 .into_iter()
                 .map(|param| match param {
-                    ASTLiteral::Integer(u) => u as usize,
+                    ASTLiteral::UInt64(u) => u as usize,
+                    ASTLiteral::Decimal128 { .. } => 0_usize,
                     _ => unimplemented!(),
                 })
                 .collect(),
@@ -296,6 +297,33 @@ pub fn transform_expr(ast: AExpr, columns: &[(&str, DataType)]) -> RawExpr {
                 name,
                 params: vec![],
                 args: vec![transform_expr(*expr, columns)],
+            }
+        }
+        AExpr::Map { span, kvs } => {
+            let mut keys = Vec::with_capacity(kvs.len());
+            let mut vals = Vec::with_capacity(kvs.len());
+            for (key, val) in kvs {
+                keys.push(transform_expr(key, columns));
+                vals.push(transform_expr(val, columns));
+            }
+            let keys = RawExpr::FunctionCall {
+                span,
+                name: "array".to_string(),
+                params: vec![],
+                args: keys,
+            };
+            let vals = RawExpr::FunctionCall {
+                span,
+                name: "array".to_string(),
+                params: vec![],
+                args: vals,
+            };
+            let args = vec![keys, vals];
+            RawExpr::FunctionCall {
+                span,
+                name: "map".to_string(),
+                params: vec![],
+                args,
             }
         }
         AExpr::Tuple { span, exprs } => RawExpr::FunctionCall {
@@ -518,7 +546,7 @@ fn transform_data_type(target_type: common_ast::ast::TypeName) -> DataType {
 
 pub fn transform_literal(lit: ASTLiteral) -> Literal {
     match lit {
-        ASTLiteral::Integer(u) => {
+        ASTLiteral::UInt64(u) => {
             if u < u8::MAX as u64 {
                 Literal::UInt8(u as u8)
             } else if u < u16::MAX as u64 {
@@ -529,6 +557,35 @@ pub fn transform_literal(lit: ASTLiteral) -> Literal {
                 Literal::UInt64(u)
             }
         }
+        ASTLiteral::Int64(int) => {
+            if int >= i8::MIN as i64 && int <= i8::MAX as i64 {
+                Literal::Int8(int as i8)
+            } else if int >= i16::MIN as i64 && int <= i16::MAX as i64 {
+                Literal::Int16(int as i16)
+            } else if int >= i32::MIN as i64 && int <= i32::MAX as i64 {
+                Literal::Int32(int as i32)
+            } else {
+                Literal::Int64(int)
+            }
+        }
+        ASTLiteral::Decimal128 {
+            value,
+            precision,
+            scale,
+        } => Literal::Decimal128 {
+            value,
+            precision,
+            scale,
+        },
+        ASTLiteral::Decimal256 {
+            value,
+            precision,
+            scale,
+        } => Literal::Decimal256 {
+            value,
+            precision,
+            scale,
+        },
         ASTLiteral::String(s) => Literal::String(s.as_bytes().to_vec()),
         ASTLiteral::Boolean(b) => Literal::Boolean(b),
         ASTLiteral::Null => Literal::Null,

@@ -116,7 +116,6 @@ fn test_format() {
                         }
                         .into(),
                     ],
-                    return_type: Box::new(DataType::Boolean),
                 }
                 .into(),
             ],
@@ -137,6 +136,7 @@ fn test_format() {
             join_type: JoinType::Inner,
             marker_index: None,
             from_correlated_subquery: false,
+            contain_runtime_filter: false,
         }
         .into(),
         SExpr::create_unary(
