@@ -27,7 +27,6 @@ use common_meta_app::principal::UserPrivilegeType;
 use common_settings::Settings;
 use common_users::RoleCacheManager;
 use common_users::BUILTIN_ROLE_PUBLIC;
-use futures::channel::*;
 use parking_lot::RwLock;
 
 use crate::clusters::ClusterDiscovery;
@@ -89,12 +88,8 @@ impl Session {
     pub fn quit(self: &Arc<Self>) {
         let session_ctx = self.session_ctx.clone();
         if session_ctx.get_current_query_id().is_some() {
-            if let Some(io_shutdown) = session_ctx.take_io_shutdown_tx() {
-                let (tx, rx) = oneshot::channel();
-                if io_shutdown.send(tx).is_ok() {
-                    // We ignore this error because the receiver is return cancelled error.
-                    let _ = futures::executor::block_on(rx);
-                }
+            if let Some(shutdown_fun) = session_ctx.take_io_shutdown_tx() {
+                shutdown_fun();
             }
         }
 
@@ -152,17 +147,9 @@ impl Session {
     }
 
     pub fn attach<F>(self: &Arc<Self>, host: Option<SocketAddr>, io_shutdown: F)
-    where F: FnOnce() + Send + 'static {
-        let (tx, rx) = oneshot::channel();
+    where F: FnOnce() + Send + Sync + 'static {
         self.session_ctx.set_client_host(host);
-        self.session_ctx.set_io_shutdown_tx(Some(tx));
-
-        common_base::base::tokio::spawn(async move {
-            if let Ok(tx) = rx.await {
-                (io_shutdown)();
-                tx.send(()).ok();
-            }
-        });
+        self.session_ctx.set_io_shutdown_tx(io_shutdown);
     }
 
     pub fn set_current_database(self: &Arc<Self>, database_name: String) {
@@ -305,11 +292,13 @@ impl Session {
     pub async fn validate_privilege(
         self: &Arc<Self>,
         object: &GrantObject,
-        privilege: UserPrivilegeType,
+        privilege: Vec<UserPrivilegeType>,
     ) -> Result<()> {
         // 1. check user's privilege set
         let current_user = self.get_current_user()?;
-        let user_verified = current_user.grants.verify_privilege(object, privilege);
+        let user_verified = current_user
+            .grants
+            .verify_privilege(object, privilege.clone());
         if user_verified {
             return Ok(());
         }
@@ -318,16 +307,16 @@ impl Session {
         self.ensure_current_role().await?;
         let current_role = self.get_current_role();
         let role_verified = current_role
-            .map(|r| r.grants.verify_privilege(object, privilege))
+            .map(|r| r.grants.verify_privilege(object, privilege.clone()))
             .unwrap_or(false);
         if role_verified {
             return Ok(());
         }
 
         Err(ErrorCode::PermissionDenied(format!(
-            "Permission denied, user {} requires {} privilege on {}",
+            "Permission denied, user {} requires {:?} privilege on {}",
             &current_user.identity(),
-            privilege,
+            privilege.clone(),
             object
         )))
     }

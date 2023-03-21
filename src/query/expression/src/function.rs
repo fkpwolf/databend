@@ -70,7 +70,7 @@ pub struct EvalContext<'a> {
 
 impl<'a> EvalContext<'a> {
     #[inline]
-    pub fn set_error(&mut self, row: usize, error_msg: impl AsRef<str>) {
+    pub fn set_error(&mut self, row: usize, error_msg: impl Into<String>) {
         // If the row is NULL, we don't need to set error.
         if self
             .validity
@@ -88,7 +88,7 @@ impl<'a> EvalContext<'a> {
             None => {
                 let mut valids = constant_bitmap(true, self.num_rows.max(1));
                 valids.set(row, false);
-                self.errors = Some((valids, error_msg.as_ref().to_string()));
+                self.errors = Some((valids, error_msg.into()));
             }
         }
     }

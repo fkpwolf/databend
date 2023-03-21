@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -47,9 +48,12 @@ use common_meta_app::principal::FileFormatOptions;
 use common_meta_app::principal::RoleInfo;
 use common_meta_app::principal::StageFileFormatType;
 use common_meta_app::principal::UserInfo;
+use common_meta_app::schema::GetTableCopiedFileReq;
 use common_meta_app::schema::TableInfo;
 use common_settings::Settings;
 use common_storage::DataOperator;
+use common_storage::StageFileInfo;
+use common_storage::StageFileStatus;
 use common_storage::StorageMetrics;
 use common_storages_fuse::TableContext;
 use common_storages_parquet::ParquetTable;
@@ -69,11 +73,18 @@ use crate::sessions::ProcessInfo;
 use crate::sessions::QueryContextShared;
 use crate::sessions::Session;
 use crate::sessions::SessionManager;
+use crate::sessions::SessionType;
 use crate::storages::Table;
+
+const MYSQL_VERSION: &str = "8.0.26";
+const CLICKHOUSE_VERSION: &str = "8.12.14";
+const MAX_QUERY_COPIED_FILES_NUM: usize = 1000;
 
 #[derive(Clone)]
 pub struct QueryContext {
     version: String,
+    mysql_version: String,
+    clickhouse_version: String,
     partition_queue: Arc<RwLock<VecDeque<PartInfoPtr>>>,
     shared: Arc<QueryContextShared>,
     fragment_id: Arc<AtomicUsize>,
@@ -90,6 +101,8 @@ impl QueryContext {
         Arc::new(QueryContext {
             partition_queue: Arc::new(RwLock::new(VecDeque::new())),
             version: format!("DatabendQuery {}", *DATABEND_COMMIT_VERSION),
+            mysql_version: format!("{}-{}", MYSQL_VERSION, *DATABEND_COMMIT_VERSION),
+            clickhouse_version: CLICKHOUSE_VERSION.to_string(),
             shared,
             fragment_id: Arc::new(AtomicUsize::new(0)),
         })
@@ -247,6 +260,16 @@ impl TableContext for QueryContext {
         self.shared.result_progress.as_ref().get_values()
     }
 
+    fn get_status_info(&self) -> String {
+        let status = self.shared.status.read();
+        status.clone()
+    }
+
+    fn set_status_info(&self, info: &str) {
+        let mut status = self.shared.status.write();
+        *status = info.to_string();
+    }
+
     fn get_partition(&self) -> Option<PartInfoPtr> {
         self.partition_queue.write().pop_front()
     }
@@ -300,7 +323,7 @@ impl TableContext for QueryContext {
         self.shared.cacheable.store(cacheable, Ordering::Release);
     }
 
-    fn attach_query_str(&self, kind: String, query: &str) {
+    fn attach_query_str(&self, kind: String, query: String) {
         self.shared.attach_query_str(kind, query);
     }
 
@@ -344,7 +367,12 @@ impl TableContext for QueryContext {
     }
 
     fn get_fuse_version(&self) -> String {
-        self.version.clone()
+        let session = self.get_current_session();
+        match session.get_type() {
+            SessionType::ClickHouseHttpHandler => self.clickhouse_version.clone(),
+            SessionType::MySQL => self.mysql_version.clone(),
+            _ => self.version.clone(),
+        }
     }
 
     fn get_format_settings(&self) -> Result<FormatSettings> {
@@ -463,6 +491,58 @@ impl TableContext for QueryContext {
         table: &str,
     ) -> Result<Arc<dyn Table>> {
         self.shared.get_table(catalog, database, table).await
+    }
+
+    async fn color_copied_files(
+        &self,
+        catalog_name: &str,
+        database_name: &str,
+        table_name: &str,
+        files: Vec<StageFileInfo>,
+    ) -> Result<Vec<StageFileInfo>> {
+        let tenant = self.get_tenant();
+        let catalog = self.get_catalog(catalog_name)?;
+        let table = catalog
+            .get_table(&tenant, database_name, table_name)
+            .await?;
+        let table_id = table.get_id();
+
+        let mut copied_files = BTreeMap::new();
+        for chunk in files.chunks(MAX_QUERY_COPIED_FILES_NUM) {
+            let files = chunk.iter().map(|v| v.path.clone()).collect::<Vec<_>>();
+            let req = GetTableCopiedFileReq { table_id, files };
+            let resp = catalog
+                .get_table_copied_file_info(&tenant, database_name, req)
+                .await?;
+            copied_files.extend(resp.file_info);
+        }
+
+        // Colored.
+        let mut results = Vec::with_capacity(files.len());
+        for mut file in files {
+            if let Some(copied_file) = copied_files.get(&file.path) {
+                match &copied_file.etag {
+                    Some(copied_etag) => {
+                        if let Some(file_etag) = &file.etag {
+                            // Check the 7 bytes etag prefix.
+                            if file_etag.starts_with(copied_etag) {
+                                file.status = StageFileStatus::AlreadyCopied;
+                            }
+                        }
+                    }
+                    None => {
+                        // etag is none, compare with content_length and last_modified.
+                        if copied_file.content_length == file.size
+                            && copied_file.last_modified == Some(file.last_modified)
+                        {
+                            file.status = StageFileStatus::AlreadyCopied;
+                        }
+                    }
+                }
+            }
+            results.push(file);
+        }
+        Ok(results)
     }
 }
 

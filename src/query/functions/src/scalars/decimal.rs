@@ -17,7 +17,7 @@ use std::ops::*;
 use std::sync::Arc;
 
 use common_arrow::arrow::buffer::Buffer;
-use common_expression::read_decimal_with_size;
+use common_expression::serialize::read_decimal_with_size;
 use common_expression::types::decimal::*;
 use common_expression::types::string::StringColumn;
 use common_expression::types::*;
@@ -496,7 +496,7 @@ fn string_to_decimal_column<T: Decimal>(
         match read_decimal_with_size::<T>(buf, size, true) {
             Ok((d, _)) => values.push(d),
             Err(e) => {
-                ctx.set_error(row, format!("fail to decode string as decimal: {e}"));
+                ctx.set_error(row, e.message());
                 values.push(T::zero())
             }
         }
@@ -512,7 +512,7 @@ fn string_to_decimal_scalar<T: Decimal>(
     let value = match read_decimal_with_size::<T>(string_buf, size, true) {
         Ok((d, _)) => d,
         Err(e) => {
-            ctx.set_error(0, format!("fail to decode string as decimal: {e}"));
+            ctx.set_error(0, e.message());
             T::zero()
         }
     };
