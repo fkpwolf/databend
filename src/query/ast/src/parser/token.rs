@@ -247,6 +247,8 @@ pub enum TokenKind {
     ADD,
     #[token("ANY", ignore(ascii_case))]
     ANY,
+    #[token("ARGS", ignore(ascii_case))]
+    ARGS,
     #[token("AUTO", ignore(ascii_case))]
     AUTO,
     #[token("SOME", ignore(ascii_case))]
@@ -315,6 +317,8 @@ pub enum TokenKind {
     CHAR,
     #[token("COLUMN", ignore(ascii_case))]
     COLUMN,
+    #[token("COLUMNS", ignore(ascii_case))]
+    COLUMNS,
     #[token("CHARACTER", ignore(ascii_case))]
     CHARACTER,
     #[token("CONFLICT", ignore(ascii_case))]
@@ -395,6 +399,8 @@ pub enum TokenKind {
     ENABLE_VIRTUAL_HOST_STYLE,
     #[token("END", ignore(ascii_case))]
     END,
+    #[token("ENDPOINT", ignore(ascii_case))]
+    ENDPOINT,
     #[token("ENGINE", ignore(ascii_case))]
     ENGINE,
     #[token("ENGINES", ignore(ascii_case))]
@@ -681,6 +687,10 @@ pub enum TokenKind {
     SECOND,
     #[token("SELECT", ignore(ascii_case))]
     SELECT,
+    #[token("PIVOT", ignore(ascii_case))]
+    PIVOT,
+    #[token("UNPIVOT", ignore(ascii_case))]
+    UNPIVOT,
     #[token("SEGMENT", ignore(ascii_case))]
     SEGMENT,
     #[token("SET", ignore(ascii_case))]
@@ -703,6 +713,8 @@ pub enum TokenKind {
     SINGLE,
     #[token("SIZE_LIMIT", ignore(ascii_case))]
     SIZE_LIMIT,
+    #[token("MAX_FILES", ignore(ascii_case))]
+    MAX_FILES,
     #[token("SKIP_HEADER", ignore(ascii_case))]
     SKIP_HEADER,
     #[token("SMALLINT", ignore(ascii_case))]
@@ -739,6 +751,8 @@ pub enum TokenKind {
     SUBSTR,
     #[token("SEMI", ignore(ascii_case))]
     SEMI,
+    #[token("SOUNDS", ignore(ascii_case))]
+    SOUNDS,
     #[token("TABLE", ignore(ascii_case))]
     TABLE,
     #[token("TABLES", ignore(ascii_case))]
@@ -749,6 +763,8 @@ pub enum TokenKind {
     TENANTSETTING,
     #[token("TENANTS", ignore(ascii_case))]
     TENANTS,
+    #[token("TENANT", ignore(ascii_case))]
+    TENANT,
     #[token("THEN", ignore(ascii_case))]
     THEN,
     #[token("TIMESTAMP", ignore(ascii_case))]
@@ -771,8 +787,6 @@ pub enum TokenKind {
     TRANSIENT,
     #[token("TRIM", ignore(ascii_case))]
     TRIM,
-    #[token("ARRAY_SORT", ignore(ascii_case))]
-    ARRAY_SORT,
     #[token("TRUE", ignore(ascii_case))]
     TRUE,
     #[token("TRUNCATE", ignore(ascii_case))]
@@ -827,6 +841,8 @@ pub enum TokenKind {
     WHEN,
     #[token("WHERE", ignore(ascii_case))]
     WHERE,
+    #[token("WINDOW", ignore(ascii_case))]
+    WINDOW,
     #[token("WITH", ignore(ascii_case))]
     WITH,
     #[token("XML", ignore(ascii_case))]
@@ -923,9 +939,10 @@ impl TokenKind {
         )
     }
 
-    pub fn is_reserved_function_name(&self, after_as: bool) -> bool {
-        match self {
-            | TokenKind::ALL
+    pub fn is_reserved_function_name(&self) -> bool {
+        matches!(
+            self,
+            TokenKind::ALL
             // | TokenKind::ANALYSE
             | TokenKind::ANALYZE
             | TokenKind::AND
@@ -1015,7 +1032,6 @@ impl TokenKind {
             | TokenKind::TRAILING
             // | TokenKind::TREAT
             | TokenKind::TRIM
-            | TokenKind::ARRAY_SORT
             | TokenKind::TRUE
             | TokenKind::TRY_CAST
             // | TokenKind::UNIQUE
@@ -1035,7 +1051,7 @@ impl TokenKind {
             // | TokenKind::XMLROOT
             // | TokenKind::XMLSERIALIZE
             // | TokenKind::XMLTABLE
-            | TokenKind::WHEN => true,
+            | TokenKind::WHEN
             | TokenKind::ARRAY
             | TokenKind::AS
             // | TokenKind::CHAR
@@ -1057,7 +1073,6 @@ impl TokenKind {
             | TokenKind::ORDER
             | TokenKind::OVER
             | TokenKind::ROWS
-            | TokenKind::RANGE
             // | TokenKind::PRECISION
             // | TokenKind::RETURNING
             | TokenKind::TO
@@ -1069,9 +1084,7 @@ impl TokenKind {
             | TokenKind::DATE_SUB
             | TokenKind::DATE_TRUNC
             | TokenKind::IGNORE_RESULT
-            if !after_as => true,
-            _ => false
-        }
+        )
     }
 
     pub fn is_reserved_ident(&self, after_as: bool) -> bool {
@@ -1136,6 +1149,8 @@ impl TokenKind {
             // | TokenKind::REFERENCES
             | TokenKind::RIGHT
             | TokenKind::SELECT
+            | TokenKind::PIVOT
+            | TokenKind::UNPIVOT
             // | TokenKind::SESSION_USER
             // | TokenKind::SIMILAR
             | TokenKind::SOME
@@ -1154,6 +1169,7 @@ impl TokenKind {
             | TokenKind::WHEN => true,
             | TokenKind::ARRAY
             | TokenKind::AS
+            | TokenKind::BETWEEN
             | TokenKind::CREATE
             | TokenKind::EXCEPT
             // | TokenKind::FETCH
@@ -1173,6 +1189,7 @@ impl TokenKind {
             | TokenKind::OF
             | TokenKind::ORDER
             | TokenKind::OVER
+            | TokenKind::PARTITION
             | TokenKind::ROWS
             | TokenKind::RANGE
             // | TokenKind::OVERLAPS
@@ -1183,7 +1200,7 @@ impl TokenKind {
             | TokenKind::TO
             | TokenKind::UNION
             | TokenKind::WHERE
-            // | TokenKind::WINDOW
+            | TokenKind::WINDOW
             | TokenKind::WITH
             | TokenKind::IGNORE_RESULT
             if !after_as => true,

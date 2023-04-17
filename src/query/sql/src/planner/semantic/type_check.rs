@@ -31,6 +31,7 @@ use common_ast::ast::UnaryOperator;
 use common_ast::ast::WindowFrame;
 use common_ast::ast::WindowFrameBound;
 use common_ast::ast::WindowFrameUnits;
+use common_ast::ast::WindowSpec;
 use common_ast::parser::parse_expr;
 use common_ast::parser::tokenize_sql;
 use common_catalog::catalog::CatalogManager;
@@ -40,53 +41,58 @@ use common_exception::Result;
 use common_exception::Span;
 use common_expression::infer_schema_type;
 use common_expression::type_check;
-use common_expression::type_check::check_literal;
 use common_expression::type_check::check_number;
 use common_expression::type_check::common_super_type;
 use common_expression::types::decimal::DecimalDataType;
+use common_expression::types::decimal::DecimalScalar;
 use common_expression::types::decimal::DecimalSize;
-use common_expression::types::number::F64;
 use common_expression::types::DataType;
 use common_expression::types::NumberDataType;
+use common_expression::types::NumberScalar;
+use common_expression::ConstantFolder;
+use common_expression::FunctionContext;
+use common_expression::FunctionKind;
 use common_expression::RawExpr;
+use common_expression::Scalar;
 use common_expression::TableDataType;
 use common_functions::aggregates::AggregateCountFunction;
 use common_functions::aggregates::AggregateFunctionFactory;
 use common_functions::is_builtin_function;
-use common_functions::scalars::BUILTIN_FUNCTIONS;
+use common_functions::BUILTIN_FUNCTIONS;
+use common_functions::GENERAL_WINDOW_FUNCTIONS;
 use common_users::UserApiProvider;
+use simsearch::SimSearch;
 
 use super::name_resolution::NameResolutionContext;
 use super::normalize_identifier;
 use crate::binder::wrap_cast;
 use crate::binder::Binder;
+use crate::binder::ExprContext;
 use crate::binder::NameResolutionResult;
 use crate::optimizer::RelExpr;
 use crate::planner::metadata::optimize_remove_count_args;
 use crate::plans::AggregateFunction;
-use crate::plans::AndExpr;
 use crate::plans::BoundColumnRef;
 use crate::plans::BoundInternalColumnRef;
 use crate::plans::CastExpr;
-use crate::plans::ComparisonExpr;
 use crate::plans::ComparisonOp;
 use crate::plans::ConstantExpr;
 use crate::plans::FunctionCall;
-use crate::plans::NotExpr;
-use crate::plans::OrExpr;
 use crate::plans::ScalarExpr;
 use crate::plans::SubqueryExpr;
 use crate::plans::SubqueryType;
-use crate::plans::Unnest;
 use crate::plans::WindowFunc;
 use crate::plans::WindowFuncFrame;
 use crate::plans::WindowFuncFrameBound;
 use crate::plans::WindowFuncFrameUnits;
+use crate::plans::WindowFuncType;
+use crate::plans::WindowOrderBy;
 use crate::BaseTableColumn;
 use crate::BindContext;
 use crate::ColumnBinding;
 use crate::ColumnEntry;
 use crate::MetadataRef;
+use crate::Visibility;
 
 /// A helper for type checking.
 ///
@@ -98,8 +104,9 @@ use crate::MetadataRef;
 /// If failed, a `SemanticError` will be raised. This may caused by incompatible
 /// argument types of expressions, or unresolvable columns.
 pub struct TypeChecker<'a> {
-    bind_context: &'a BindContext,
+    bind_context: &'a mut BindContext,
     ctx: Arc<dyn TableContext>,
+    func_ctx: FunctionContext,
     name_resolution_ctx: &'a NameResolutionContext,
     metadata: MetadataRef,
 
@@ -108,60 +115,57 @@ pub struct TypeChecker<'a> {
     // true if current expr is inside an aggregate function.
     // This is used to check if there is nested aggregate function.
     in_aggregate_function: bool,
+
+    // true if current expr is inside an window function.
+    // This is used to allow aggregation function in window's aggregate function.
+    in_window_function: bool,
 }
 
 impl<'a> TypeChecker<'a> {
     pub fn new(
-        bind_context: &'a BindContext,
+        bind_context: &'a mut BindContext,
         ctx: Arc<dyn TableContext>,
         name_resolution_ctx: &'a NameResolutionContext,
         metadata: MetadataRef,
         aliases: &'a [(String, ScalarExpr)],
     ) -> Self {
+        let func_ctx = ctx.get_function_context().unwrap();
         Self {
             bind_context,
             ctx,
+            func_ctx,
             name_resolution_ctx,
             metadata,
             aliases,
             in_aggregate_function: false,
+            in_window_function: false,
         }
     }
 
+    #[allow(dead_code)]
     fn post_resolve(
         &mut self,
         scalar: &ScalarExpr,
         data_type: &DataType,
     ) -> Result<(ScalarExpr, DataType)> {
-        // TODO(leiysky): constant folding with new expression
-        //
-        // if let Ok((value, value_type)) = Evaluator::eval_scalar(scalar).and_then(|evaluator| {
-        //     let func_ctx = self.ctx.try_get_function_context()?;
-        //     if scalar.is_deterministic() {
-        //         evaluator.try_eval_const(&func_ctx)
-        //     } else {
-        //         Err(ErrorCode::Internal(
-        //             "Constant folding requires the function deterministic",
-        //         ))
-        //     }
-        // }) {
-        //     Ok((
-        //         ConstantExpr {
-        //             value,
-        //             data_type: Box::new(value_type),
-        //         }
-        //         .into(),
-        //         data_type.clone(),
-        //     ))
-        // } else {
-        //     Ok((scalar.clone(), data_type.clone()))
-        // }
-
         Ok((scalar.clone(), data_type.clone()))
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve(&mut self, expr: &Expr) -> Result<Box<(ScalarExpr, DataType)>> {
+        if let Some(scalar) = self.bind_context.srfs.get(&expr.to_string()) {
+            if !matches!(self.bind_context.expr_context, ExprContext::SelectClause) {
+                return Err(ErrorCode::SemanticError(
+                    "set-returning functions are only allowed in SELECT clause",
+                )
+                .set_span(expr.span()));
+            }
+            // Found a SRF, return it directly.
+            // See `Binder::bind_project_set` for more details.
+            return Ok(Box::new((scalar.clone(), scalar.data_type()?)));
+        }
+
         let box (scalar, data_type): Box<(ScalarExpr, DataType)> = match expr {
             Expr::ColumnRef {
                 span,
@@ -370,21 +374,11 @@ impl<'a> TypeChecker<'a> {
                         )
                         .await?;
 
-                    let (_, data_type) = *self
-                        .resolve_scalar_function_call(*span, "and", vec![], vec![
-                            ge_func.clone(),
-                            le_func.clone(),
-                        ])
-                        .await?;
-
-                    Box::new((
-                        AndExpr {
-                            left: Box::new(ge_func),
-                            right: Box::new(le_func),
-                        }
-                        .into(),
-                        data_type,
-                    ))
+                    self.resolve_scalar_function_call(*span, "and", vec![], vec![
+                        ge_func.clone(),
+                        le_func.clone(),
+                    ])
+                    .await?
                 } else {
                     // Rewrite `expr NOT BETWEEN low AND high`
                     // into `expr < low OR expr > high`
@@ -395,21 +389,8 @@ impl<'a> TypeChecker<'a> {
                         .resolve_binary_op(*span, &BinaryOperator::Gt, expr.as_ref(), high.as_ref())
                         .await?;
 
-                    let (_, data_type) = *self
-                        .resolve_scalar_function_call(*span, "or", vec![], vec![
-                            lt_func.clone(),
-                            gt_func.clone(),
-                        ])
-                        .await?;
-
-                    Box::new((
-                        OrExpr {
-                            left: Box::new(lt_func),
-                            right: Box::new(gt_func),
-                        }
-                        .into(),
-                        data_type,
-                    ))
+                    self.resolve_scalar_function_call(*span, "or", vec![], vec![lt_func, gt_func])
+                        .await?
                 }
             }
 
@@ -577,15 +558,7 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Literal { span, lit } => {
                 let box (value, data_type) = self.resolve_literal(lit)?;
-                Box::new((
-                    ConstantExpr {
-                        span: *span,
-                        value,
-                        data_type: Box::new(data_type.clone()),
-                    }
-                    .into(),
-                    data_type,
-                ))
+                Box::new((ConstantExpr { span: *span, value }.into(), data_type))
             }
 
             Expr::FunctionCall {
@@ -596,99 +569,115 @@ impl<'a> TypeChecker<'a> {
                 params,
                 window,
             } => {
-                let func_name = name.name.to_lowercase();
+                let func_name = normalize_identifier(name, self.name_resolution_ctx).to_string();
                 let func_name = func_name.as_str();
                 if !is_builtin_function(func_name)
                     && !Self::all_rewritable_scalar_function().contains(&func_name)
                 {
-                    return self.resolve_udf(*span, func_name, args).await;
+                    if let Some(udf) = self.resolve_udf(*span, func_name, args).await? {
+                        return Ok(udf);
+                    } else {
+                        // Function not found, try to find and suggest similar function name.
+                        let all_funcs = BUILTIN_FUNCTIONS
+                            .all_function_names()
+                            .into_iter()
+                            .chain(AggregateFunctionFactory::instance().registered_names())
+                            .chain(
+                                Self::all_rewritable_scalar_function()
+                                    .iter()
+                                    .cloned()
+                                    .map(str::to_string),
+                            );
+                        let mut engine: SimSearch<String> = SimSearch::new();
+                        for func_name in all_funcs {
+                            engine.insert(func_name.clone(), &func_name);
+                        }
+                        let possible_funcs = engine
+                            .search(func_name)
+                            .iter()
+                            .map(|name| format!("'{name}'"))
+                            .collect::<Vec<_>>();
+                        if possible_funcs.is_empty() {
+                            return Err(ErrorCode::UnknownFunction(format!(
+                                "no function matches the given name: {func_name}"
+                            ))
+                            .set_span(*span));
+                        } else {
+                            return Err(ErrorCode::UnknownFunction(format!(
+                                "no function matches the given name: '{func_name}', do you mean {}?",
+                                possible_funcs.join(", ")
+                            ))
+                                .set_span(*span));
+                        }
+                    }
                 }
 
                 let args: Vec<&Expr> = args.iter().collect();
 
-                if AggregateFunctionFactory::instance().contains(func_name) {
-                    if self.in_aggregate_function {
-                        // Reset the state
-                        self.in_aggregate_function = false;
+                // Check assumptions if it is a set returning function
+                if BUILTIN_FUNCTIONS
+                    .get_property(&name.name)
+                    .map(|property| property.kind == FunctionKind::SRF)
+                    .unwrap_or(false)
+                {
+                    if matches!(
+                        self.bind_context.expr_context,
+                        ExprContext::InSetReturningFunction
+                    ) {
                         return Err(ErrorCode::SemanticError(
-                            "aggregate function calls cannot be nested".to_string(),
+                            "set-returning functions cannot be nested".to_string(),
                         )
-                        .set_span(expr.span()));
+                        .set_span(*span));
                     }
 
-                    // Check aggregate function
-                    let params = params
-                        .iter()
-                        .map(|literal| self.resolve_literal(literal).map(|box (value, _)| value))
-                        .collect::<Result<Vec<_>>>()?;
-
-                    let scalar_params = params
-                        .iter()
-                        .map(|param| check_literal(param).0)
-                        .collect::<Vec<_>>();
-
-                    self.in_aggregate_function = true;
-                    let mut arguments = vec![];
-                    let mut arg_types = vec![];
-                    for arg in args.iter() {
-                        let box (argument, arg_type) = self.resolve(arg).await?;
-                        arguments.push(argument);
-                        arg_types.push(arg_type);
-                    }
-                    self.in_aggregate_function = false;
-
-                    // Rewrite `xxx(distinct)` to `xxx_distinct(...)`
-                    let (func_name, distinct) =
-                        if func_name.eq_ignore_ascii_case("count") && *distinct {
-                            ("count_distinct", false)
-                        } else {
-                            (func_name, *distinct)
-                        };
-
-                    let func_name = if distinct {
-                        format!("{}_distinct", func_name)
-                    } else {
-                        func_name.to_string()
-                    };
-
-                    let agg_func = AggregateFunctionFactory::instance()
-                        .get(&func_name, scalar_params, arg_types)
-                        .map_err(|e| e.set_span(*span))?;
-
-                    let args = if optimize_remove_count_args(&func_name, distinct, args.as_slice())
-                    {
-                        vec![]
-                    } else {
-                        arguments
-                    };
-
-                    let new_agg_func = AggregateFunction {
-                        display_name: format!("{:#}", expr),
-                        func_name,
-                        distinct: false,
-                        params,
-                        args,
-                        return_type: Box::new(agg_func.return_type()?),
-                    };
-
-                    let data_type = agg_func.return_type()?;
-
-                    if let Some(window) = window {
-                        // window function
-                        let mut partitions = vec![];
-                        for p in window.partition_by.iter() {
-                            let box (part, _part_type) = self.resolve(p).await?;
-                            partitions.push(part);
-                        }
-                        self.resolve_window(
-                            *span,
-                            new_agg_func.clone(),
-                            partitions,
-                            window.window_frame.clone(),
-                            data_type.clone(),
+                    if !matches!(self.bind_context.expr_context, ExprContext::SelectClause) {
+                        return Err(ErrorCode::SemanticError(
+                            "set-returning functions can only be used in SELECT".to_string(),
                         )
+                        .set_span(*span));
+                    }
+
+                    // Should have been handled with `BindContext::srfs`
+                    return Err(ErrorCode::Internal("Logical error, there is a bug!"));
+                }
+
+                let name = func_name.to_lowercase();
+                if GENERAL_WINDOW_FUNCTIONS.contains(&name.as_str()) {
+                    // general window function
+                    if window.is_none() {
+                        return Err(ErrorCode::SemanticError(format!(
+                            "window function {name} can only be used in window clause"
+                        )));
+                    }
+                    if !args.is_empty() {
+                        return Err(ErrorCode::SemanticError(format!(
+                            "window function {name} does not have any argument"
+                        )));
+                    }
+                    let window = window.as_ref().unwrap();
+                    // WindowReference already rewritten by `SelectRewriter` before.
+                    let window = window.as_window_spec().unwrap();
+                    let display_name = format!("{:#}", expr);
+                    let func = WindowFuncType::from_name(&name)?;
+                    self.resolve_window(*span, display_name, window, func)
                         .await?
+                } else if AggregateFunctionFactory::instance().contains(&name) {
+                    let in_window = self.in_window_function;
+                    self.in_window_function = self.in_window_function || window.is_some();
+                    let (new_agg_func, data_type) = self
+                        .resolve_aggregate_function(*span, &name, expr, *distinct, params, &args)
+                        .await?;
+                    self.in_window_function = in_window;
+                    if let Some(window) = window {
+                        // aggregate window function
+                        let display_name = format!("{:#}", expr);
+                        let func = WindowFuncType::Aggregate(new_agg_func);
+                        // WindowReference already rewritten by `SelectRewriter` before.
+                        let window = window.as_window_spec().unwrap();
+                        self.resolve_window(*span, display_name, window, func)
+                            .await?
                     } else {
+                        // aggregate function
                         Box::new((new_agg_func.into(), data_type))
                     }
                 } else {
@@ -698,7 +687,7 @@ impl<'a> TypeChecker<'a> {
                         .map(|literal| match literal {
                             Literal::UInt64(n) => Ok(*n as usize),
                             lit => Err(ErrorCode::SemanticError(format!(
-                                "Invalid parameter {lit} for scalar function"
+                                "invalid parameter {lit} for scalar function"
                             ))
                             .set_span(*span)),
                         })
@@ -851,17 +840,6 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Array { span, exprs, .. } => self.resolve_array(*span, exprs).await?,
 
-            Expr::ArraySort {
-                span,
-                expr,
-                asc,
-                null_first,
-                ..
-            } => {
-                self.resolve_array_sort(*span, expr, asc, null_first)
-                    .await?
-            }
-
             Expr::Position {
                 substr_expr,
                 str_expr,
@@ -880,34 +858,95 @@ impl<'a> TypeChecker<'a> {
             Expr::Tuple { span, exprs, .. } => self.resolve_tuple(*span, exprs).await?,
         };
 
-        Ok(Box::new(self.post_resolve(&scalar, &data_type)?))
+        Ok(Box::new((scalar, data_type)))
     }
 
     // TODO: remove this function
     fn rewrite_substring(args: &mut [ScalarExpr]) {
         if let ScalarExpr::ConstantExpr(expr) = &args[1] {
-            if let common_expression::Literal::UInt8(0) = expr.value {
+            if let common_expression::Scalar::Number(NumberScalar::UInt8(0)) = expr.value {
                 args[1] = ConstantExpr {
                     span: expr.span,
-                    value: common_expression::Literal::Int64(1),
-                    data_type: Box::new(DataType::Number(NumberDataType::Int64)),
+                    value: common_expression::Scalar::Number(NumberScalar::Int64(1)),
                 }
                 .into();
             }
         }
     }
 
-    #[async_recursion::async_recursion]
-    pub async fn resolve_window(
+    #[async_backtrace::framed]
+    async fn resolve_window(
         &mut self,
-        _span: Span,
-        agg_func: AggregateFunction,
-        partitions: Vec<ScalarExpr>,
-        window_frame: Option<WindowFrame>,
-        return_type: DataType,
+        span: Span,
+        display_name: String,
+        window: &WindowSpec,
+        func: WindowFuncType,
     ) -> Result<Box<(ScalarExpr, DataType)>> {
-        let frame = window_frame.unwrap();
-        let units = match frame.units.clone() {
+        if self.in_window_function {
+            // Reset the state
+            self.in_window_function = false;
+            return Err(ErrorCode::SemanticError(
+                "window function calls cannot be nested".to_string(),
+            )
+            .set_span(span));
+        }
+        let mut partitions = Vec::with_capacity(window.partition_by.len());
+        for p in window.partition_by.iter() {
+            let box (part, _part_type) = self.resolve(p).await?;
+            partitions.push(part);
+        }
+        let mut order_by = Vec::with_capacity(window.order_by.len());
+
+        for o in window.order_by.iter() {
+            let box (order, _) = self.resolve(&o.expr).await?;
+            order_by.push(WindowOrderBy {
+                expr: order,
+                asc: o.asc,
+                nulls_first: o.nulls_first,
+            })
+        }
+        let frame = self
+            .resolve_window_frame(span, &mut order_by, window.window_frame.clone())
+            .await?;
+        let data_type = func.return_type();
+        let window_func = WindowFunc {
+            display_name,
+            func,
+            partition_by: partitions,
+            order_by,
+            frame,
+        };
+        Ok(Box::new((window_func.into(), data_type)))
+    }
+
+    // just support integer
+    #[inline]
+    fn resolve_rows_offset(&self, expr: &Expr) -> Result<Scalar> {
+        if let Expr::Literal { lit, .. } = expr {
+            let box (value, _) = self.resolve_literal(lit)?;
+            match value {
+                Scalar::Number(NumberScalar::UInt8(v)) => {
+                    return Ok(Scalar::Number(NumberScalar::UInt64(v as u64)));
+                }
+                Scalar::Number(NumberScalar::UInt16(v)) => {
+                    return Ok(Scalar::Number(NumberScalar::UInt64(v as u64)));
+                }
+                Scalar::Number(NumberScalar::UInt32(v)) => {
+                    return Ok(Scalar::Number(NumberScalar::UInt64(v as u64)));
+                }
+                Scalar::Number(NumberScalar::UInt64(_)) => return Ok(value),
+                _ => {}
+            }
+        }
+
+        Err(ErrorCode::SemanticError(
+            "Only unsigned numbers are allowed in ROWS offset".to_string(),
+        )
+        .set_span(expr.span()))
+    }
+
+    fn resolve_window_rows_frame(&self, frame: WindowFrame) -> Result<WindowFuncFrame> {
+        let units = match frame.units {
             WindowFrameUnits::Rows => WindowFuncFrameUnits::Rows,
             WindowFrameUnits::Range => WindowFuncFrameUnits::Range,
         };
@@ -915,53 +954,311 @@ impl<'a> TypeChecker<'a> {
             WindowFrameBound::CurrentRow => WindowFuncFrameBound::CurrentRow,
             WindowFrameBound::Preceding(f) => {
                 if let Some(box expr) = f {
-                    let box (result_expr, _) = self.resolve(&expr).await?;
-                    WindowFuncFrameBound::Preceding(Some(Box::new(result_expr)))
+                    WindowFuncFrameBound::Preceding(Some(self.resolve_rows_offset(&expr)?))
                 } else {
                     WindowFuncFrameBound::Preceding(None)
                 }
             }
             WindowFrameBound::Following(f) => {
                 if let Some(box expr) = f {
-                    let box (result_expr, _) = self.resolve(&expr).await?;
-                    WindowFuncFrameBound::Following(Some(Box::new(result_expr)))
+                    WindowFuncFrameBound::Following(Some(self.resolve_rows_offset(&expr)?))
                 } else {
                     WindowFuncFrameBound::Following(None)
                 }
             }
         };
-
         let end = match frame.end_bound {
             WindowFrameBound::CurrentRow => WindowFuncFrameBound::CurrentRow,
             WindowFrameBound::Preceding(f) => {
                 if let Some(box expr) = f {
-                    let box (result_expr, _) = self.resolve(&expr).await?;
-                    WindowFuncFrameBound::Preceding(Some(Box::new(result_expr)))
+                    WindowFuncFrameBound::Preceding(Some(self.resolve_rows_offset(&expr)?))
                 } else {
                     WindowFuncFrameBound::Preceding(None)
                 }
             }
             WindowFrameBound::Following(f) => {
                 if let Some(box expr) = f {
-                    let box (result_expr, _) = self.resolve(&expr).await?;
-                    WindowFuncFrameBound::Following(Some(Box::new(result_expr)))
+                    WindowFuncFrameBound::Following(Some(self.resolve_rows_offset(&expr)?))
                 } else {
                     WindowFuncFrameBound::Following(None)
                 }
             }
         };
 
-        let window_func = WindowFunc {
-            agg_func,
-            partition_by: partitions,
-            frame: WindowFuncFrame { units, start, end },
+        Ok(WindowFuncFrame {
+            units,
+            start_bound: start,
+            end_bound: end,
+        })
+    }
+
+    #[async_backtrace::framed]
+    async fn resolve_range_offset(
+        &mut self,
+        bound: &WindowFrameBound,
+    ) -> Result<Option<(ScalarExpr, DataType)>> {
+        match bound {
+            WindowFrameBound::Following(Some(box expr))
+            | WindowFrameBound::Preceding(Some(box expr)) => {
+                let box (value, mut data_type) = self.resolve(expr).await?;
+                if matches!(
+                    data_type,
+                    DataType::Number(_)
+                        | DataType::Decimal(_)
+                        | DataType::Date
+                        | DataType::Timestamp
+                ) {
+                    // Make sure RANEG offset is number type.
+                    if data_type.is_decimal() {
+                        data_type = DataType::Number(NumberDataType::Float64)
+                    } else if data_type.is_date_or_date_time() {
+                        data_type = DataType::Number(NumberDataType::Int64)
+                    }
+                    return Ok(Some((value, data_type)));
+                }
+                Err(ErrorCode::SemanticError(
+                    "Only numbers are allowed in RANGE offset".to_string(),
+                )
+                .set_span(expr.span()))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    #[async_backtrace::framed]
+    async fn resolve_window_range_frame(
+        &mut self,
+        span: Span,
+        order_by: &mut WindowOrderBy,
+        frame: WindowFrame,
+    ) -> Result<WindowFuncFrame> {
+        let order_by_type = order_by.expr.data_type()?;
+        let is_nullable = order_by_type.is_nullable();
+        let mut common_type = order_by_type.remove_nullable();
+        let start_offset = self.resolve_range_offset(&frame.start_bound).await?;
+        let end_offset = self.resolve_range_offset(&frame.end_bound).await?;
+        if let Some((_, data_type)) = &start_offset {
+            common_type = type_check::common_super_type(
+                common_type.clone(),
+                data_type.clone(),
+                &BUILTIN_FUNCTIONS.default_cast_rules,
+            )
+            .ok_or_else(|| {
+                ErrorCode::SemanticError("Cannot unify ORDER BY and RANGE offset types".to_string())
+            })?;
+        }
+        if let Some((_, data_type)) = &end_offset {
+            common_type = type_check::common_super_type(
+                common_type.clone(),
+                data_type.clone(),
+                &BUILTIN_FUNCTIONS.default_cast_rules,
+            )
+            .ok_or_else(|| {
+                ErrorCode::SemanticError("Cannot unify ORDER BY and RANGE offset types".to_string())
+            })?;
+        }
+
+        // Unify ORDER BY and RANGE offsets types.
+        let start_offset = start_offset
+            .map(|(mut expr, _)| {
+                expr = wrap_cast(&expr, &common_type);
+                let expr = expr.as_expr_with_col_index()?;
+                let (expr, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
+                if let common_expression::Expr::Constant { scalar, .. } = expr {
+                    debug_assert!(matches!(scalar, Scalar::Number(_)));
+                    if scalar.is_positive() {
+                        return Ok(scalar);
+                    }
+                }
+                Err(ErrorCode::SemanticError(
+                    "Only positive numbers are allowed in RANGE offset".to_string(),
+                )
+                .set_span(span))
+            })
+            .transpose()?;
+        let end_offset = end_offset
+            .map(|(mut expr, _)| {
+                expr = wrap_cast(&expr, &common_type);
+                let expr = expr.as_expr_with_col_index()?;
+                let (expr, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
+                if let common_expression::Expr::Constant { scalar, .. } = expr {
+                    debug_assert!(matches!(scalar, Scalar::Number(_)));
+                    if scalar.is_positive() {
+                        return Ok(scalar);
+                    }
+                }
+                Err(ErrorCode::SemanticError(
+                    "Only positive numbers are allowed in RANGE offset".to_string(),
+                )
+                .set_span(span))
+            })
+            .transpose()?;
+
+        if is_nullable {
+            common_type = common_type.wrap_nullable();
+        }
+        if order_by_type != common_type {
+            order_by.expr = wrap_cast(&order_by.expr, &common_type);
+        }
+
+        let units = match frame.units {
+            WindowFrameUnits::Rows => WindowFuncFrameUnits::Rows,
+            WindowFrameUnits::Range => WindowFuncFrameUnits::Range,
+        };
+        let start = match frame.start_bound {
+            WindowFrameBound::CurrentRow => WindowFuncFrameBound::CurrentRow,
+            WindowFrameBound::Preceding(_) => WindowFuncFrameBound::Preceding(start_offset),
+            WindowFrameBound::Following(_) => WindowFuncFrameBound::Following(start_offset),
+        };
+        let end = match frame.end_bound {
+            WindowFrameBound::CurrentRow => WindowFuncFrameBound::CurrentRow,
+            WindowFrameBound::Preceding(_) => WindowFuncFrameBound::Preceding(end_offset),
+            WindowFrameBound::Following(_) => WindowFuncFrameBound::Following(end_offset),
         };
 
-        Ok(Box::new((window_func.into(), return_type)))
+        Ok(WindowFuncFrame {
+            units,
+            start_bound: start,
+            end_bound: end,
+        })
+    }
+
+    #[async_backtrace::framed]
+    async fn resolve_window_frame(
+        &mut self,
+        span: Span,
+        order_by: &mut [WindowOrderBy],
+        window_frame: Option<WindowFrame>,
+    ) -> Result<WindowFuncFrame> {
+        if let Some(frame) = window_frame {
+            if frame.units.is_range() {
+                if order_by.len() != 1 {
+                    return Err(ErrorCode::SemanticError(format!(
+                        "The RANGE OFFSET window frame requires exactly one ORDER BY column, {} given.",
+                        order_by.len()
+                    )).set_span(span));
+                }
+                self.resolve_window_range_frame(span, &mut order_by[0], frame)
+                    .await
+            } else {
+                self.resolve_window_rows_frame(frame)
+            }
+        } else if order_by.is_empty() {
+            Ok(WindowFuncFrame {
+                units: WindowFuncFrameUnits::Range,
+                start_bound: WindowFuncFrameBound::Preceding(None),
+                end_bound: WindowFuncFrameBound::Following(None),
+            })
+        } else {
+            Ok(WindowFuncFrame {
+                units: WindowFuncFrameUnits::Range,
+                start_bound: WindowFuncFrameBound::Preceding(None),
+                end_bound: WindowFuncFrameBound::CurrentRow,
+            })
+        }
+    }
+
+    /// Resolve aggregation function call.
+    #[async_backtrace::framed]
+    async fn resolve_aggregate_function(
+        &mut self,
+        span: Span,
+        func_name: &str,
+        expr: &Expr,
+        distinct: bool,
+        params: &[Literal],
+        args: &[&Expr],
+    ) -> Result<(AggregateFunction, DataType)> {
+        if self.in_aggregate_function {
+            if self.in_window_function {
+                // The aggregate function can be in window function call,
+                // but it cannot be nested.
+                // E.g. `select sum(sum(x)) over (partition by y) from t group by y;` is allowed.
+                // But `select sum(sum(sum(x))) from t;` is not allowed.
+                self.in_window_function = false;
+            } else {
+                // Reset the state
+                self.in_aggregate_function = false;
+                return Err(ErrorCode::SemanticError(
+                    "aggregate function calls cannot be nested".to_string(),
+                )
+                .set_span(expr.span()));
+            }
+        }
+
+        // Check aggregate function
+        let params = params
+            .iter()
+            .map(|literal| self.resolve_literal(literal).map(|box (value, _)| value))
+            .collect::<Result<Vec<_>>>()?;
+
+        self.in_aggregate_function = true;
+        let mut arguments = vec![];
+        let mut arg_types = vec![];
+        for arg in args.iter() {
+            let box (argument, arg_type) = self.resolve(arg).await?;
+            arguments.push(argument);
+            arg_types.push(arg_type);
+        }
+        self.in_aggregate_function = false;
+
+        // Convert the delimiter of string_agg to params
+        let params = if func_name.eq_ignore_ascii_case("string_agg")
+            && arguments.len() == 2
+            && params.is_empty()
+        {
+            let delimiter_value = ConstantExpr::try_from(arguments[1].clone());
+            if arg_types[1] != DataType::String || delimiter_value.is_err() {
+                return Err(ErrorCode::SemanticError(
+                    "The delimiter of `string_agg` must be a constant string",
+                ));
+            }
+            let delimiter = delimiter_value.unwrap();
+            vec![delimiter.value]
+        } else {
+            params
+        };
+
+        // Rewrite `xxx(distinct)` to `xxx_distinct(...)`
+        let (func_name, distinct) = if func_name.eq_ignore_ascii_case("count") && distinct {
+            ("count_distinct", false)
+        } else {
+            (func_name, distinct)
+        };
+
+        let func_name = if distinct {
+            format!("{}_distinct", func_name)
+        } else {
+            func_name.to_string()
+        };
+
+        let agg_func = AggregateFunctionFactory::instance()
+            .get(&func_name, params.clone(), arg_types)
+            .map_err(|e| e.set_span(span))?;
+
+        let args = if optimize_remove_count_args(&func_name, distinct, args) {
+            vec![]
+        } else {
+            arguments
+        };
+
+        let display_name = format!("{:#}", expr);
+        let new_agg_func = AggregateFunction {
+            display_name,
+            func_name,
+            distinct: false,
+            params,
+            args,
+            return_type: Box::new(agg_func.return_type()?),
+        };
+
+        let data_type = agg_func.return_type()?;
+
+        Ok((new_agg_func, data_type))
     }
 
     /// Resolve function call.
-    #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve_function(
         &mut self,
         span: Span,
@@ -1029,7 +1326,7 @@ impl<'a> TypeChecker<'a> {
             .await
     }
 
-    #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve_scalar_function_call(
         &mut self,
         span: Span,
@@ -1051,7 +1348,7 @@ impl<'a> TypeChecker<'a> {
         let registry = &BUILTIN_FUNCTIONS;
         let expr = type_check::check(&raw_expr, registry)?;
 
-        if !expr.is_deterministic() {
+        if !expr.is_deterministic(&BUILTIN_FUNCTIONS) {
             self.ctx.set_cacheable(false);
         }
 
@@ -1071,6 +1368,7 @@ impl<'a> TypeChecker<'a> {
     /// would be transformed into `FunctionCall`, except comparison
     /// expressions, conjunction(`AND`) and disjunction(`OR`).
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve_binary_op(
         &mut self,
         span: Span,
@@ -1086,13 +1384,31 @@ impl<'a> TypeChecker<'a> {
                     BinaryOperator::NotRLike => BinaryOperator::RLike,
                     _ => unreachable!(),
                 };
-                let (positive, data_type) = *self
+                let (positive, _) = *self
                     .resolve_binary_op(span, &positive_op, left, right)
                     .await?;
-                let scalar = ScalarExpr::NotExpr(NotExpr {
-                    argument: Box::new(positive),
-                });
-                Ok(Box::new((scalar, data_type)))
+                self.resolve_scalar_function_call(span, "not", vec![], vec![positive])
+                    .await
+            }
+            BinaryOperator::SoundsLike => {
+                // rewrite "expr1 SOUNDS LIKE expr2" to "SOUNDEX(expr1) = SOUNDEX(expr2)"
+                let box (left, _) = self.resolve(left).await?;
+                let box (right, _) = self.resolve(right).await?;
+
+                let (left, _) = *self
+                    .resolve_scalar_function_call(span, "soundex", vec![], vec![left])
+                    .await?;
+                let (right, _) = *self
+                    .resolve_scalar_function_call(span, "soundex", vec![], vec![right])
+                    .await?;
+
+                self.resolve_scalar_function_call(
+                    span,
+                    &BinaryOperator::Eq.to_func_name(),
+                    vec![],
+                    vec![left, right],
+                )
+                .await
             }
             BinaryOperator::Gt
             | BinaryOperator::Lt
@@ -1112,50 +1428,11 @@ impl<'a> TypeChecker<'a> {
                     .await?;
 
                 Ok(Box::new((
-                    ComparisonExpr {
-                        op,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    }
-                    .into(),
-                    data_type,
-                )))
-            }
-            BinaryOperator::And => {
-                let box (left, _) = self.resolve(left).await?;
-                let box (right, _) = self.resolve(right).await?;
-
-                let (_, data_type) = *self
-                    .resolve_scalar_function_call(span, "and", vec![], vec![
-                        left.clone(),
-                        right.clone(),
-                    ])
-                    .await?;
-
-                Ok(Box::new((
-                    AndExpr {
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    }
-                    .into(),
-                    data_type,
-                )))
-            }
-            BinaryOperator::Or => {
-                let box (left, _) = self.resolve(left).await?;
-                let box (right, _) = self.resolve(right).await?;
-
-                let (_, data_type) = *self
-                    .resolve_scalar_function_call(span, "or", vec![], vec![
-                        left.clone(),
-                        right.clone(),
-                    ])
-                    .await?;
-
-                Ok(Box::new((
-                    OrExpr {
-                        left: Box::new(left),
-                        right: Box::new(right),
+                    FunctionCall {
+                        span,
+                        func_name: op.to_func_name().to_string(),
+                        params: vec![],
+                        arguments: vec![left, right],
                     }
                     .into(),
                     data_type,
@@ -1171,6 +1448,7 @@ impl<'a> TypeChecker<'a> {
 
     /// Resolve unary expressions.
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve_unary_op(
         &mut self,
         span: Span,
@@ -1182,23 +1460,6 @@ impl<'a> TypeChecker<'a> {
                 // Omit unary + operator
                 self.resolve(child).await
             }
-
-            UnaryOperator::Not => {
-                let (argument, _) = *self.resolve(child).await?;
-
-                let (_, data_type) = *self
-                    .resolve_scalar_function_call(span, "not", vec![], vec![argument.clone()])
-                    .await?;
-
-                Ok(Box::new((
-                    NotExpr {
-                        argument: Box::new(argument),
-                    }
-                    .into(),
-                    data_type,
-                )))
-            }
-
             other => {
                 let name = other.to_func_name();
                 self.resolve_function(span, name.as_str(), vec![], &[child])
@@ -1208,6 +1469,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve_extract_expr(
         &mut self,
         span: Span,
@@ -1249,6 +1511,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve_date_add(
         &mut self,
         span: Span,
@@ -1275,6 +1538,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     pub async fn resolve_date_trunc(
         &mut self,
         span: Span,
@@ -1342,6 +1606,7 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    #[async_backtrace::framed]
     pub async fn resolve_subquery(
         &mut self,
         typ: SubqueryType,
@@ -1357,8 +1622,8 @@ impl<'a> TypeChecker<'a> {
         );
 
         // Create new `BindContext` with current `bind_context` as its parent, so we can resolve outer columns.
-        let bind_context = BindContext::with_parent(Box::new(self.bind_context.clone()));
-        let (s_expr, output_context) = binder.bind_query(&bind_context, subquery).await?;
+        let mut bind_context = BindContext::with_parent(Box::new(self.bind_context.clone()));
+        let (s_expr, output_context) = binder.bind_query(&mut bind_context, subquery).await?;
 
         if (typ == SubqueryType::Scalar || typ == SubqueryType::Any)
             && output_context.columns.len() > 1
@@ -1433,11 +1698,13 @@ impl<'a> TypeChecker<'a> {
             "is_null",
             "coalesce",
             "last_query_id",
-            "unnest",
+            "array_sort",
+            "array_aggregate",
         ]
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn try_rewrite_scalar_function(
         &mut self,
         span: Span,
@@ -1610,12 +1877,7 @@ impl<'a> TypeChecker<'a> {
                         let box (scalar, _) = self.resolve(args[0]).await?;
 
                         let expr = scalar.as_expr_with_col_index()?;
-                        check_number::<_, i64>(
-                            span,
-                            self.ctx.get_function_context()?,
-                            &expr,
-                            &BUILTIN_FUNCTIONS,
-                        )?
+                        check_number::<_, i64>(span, &self.func_ctx, &expr, &BUILTIN_FUNCTIONS)?
                     }
                 };
 
@@ -1631,40 +1893,143 @@ impl<'a> TypeChecker<'a> {
                     Err(e) => Err(e),
                 })
             }
-            ("unnest", args) => {
-                if args.len() != 1 {
-                    return Some(Err(ErrorCode::SemanticError(
-                        "Unnest can only be applied to one array type argument".to_string(),
-                    )
-                    .set_span(span)));
-                }
-                let inner_res = self.resolve(args[0]).await;
-                if inner_res.is_err() {
-                    return Some(inner_res);
-                }
-                let box (inner_expr, inner_type) = inner_res.unwrap();
-                Some(match inner_type {
-                    DataType::Array(inner) => {
-                        let return_type = Box::new(inner.unnest().wrap_nullable());
-                        Ok(Box::new((
-                            ScalarExpr::Unnest(Unnest {
-                                return_type,
-                                argument: Box::new(inner_expr),
-                            }),
-                            *inner,
-                        )))
+            // Try convert get function of Variant data type into a virtual column
+            ("get", args) => {
+                let mut paths = VecDeque::new();
+                let mut get_args = args.to_vec();
+                loop {
+                    if get_args.len() != 2 {
+                        break;
                     }
-                    _ => Err(ErrorCode::SemanticError(
-                        "Unnest can only be applied to one array type argument".to_string(),
-                    )
-                    .set_span(span)),
-                })
+                    if let Expr::Literal { lit, .. } = get_args[1] {
+                        match lit {
+                            Literal::UInt64(_) | Literal::String(_) => {
+                                paths.push_front((span, lit.clone()));
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                    if let Expr::FunctionCall { name, args, .. } = get_args[0] {
+                        if name.name != "get" {
+                            return None;
+                        }
+                        get_args = args.iter().collect();
+                        continue;
+                    } else if let Expr::ColumnRef { .. } = get_args[0] {
+                        let box (scalar, data_type) = self.resolve(get_args[0]).await.ok()?;
+                        if let DataType::Variant = data_type.remove_nullable() {
+                            if let ScalarExpr::BoundColumnRef(BoundColumnRef {
+                                ref column, ..
+                            }) = scalar
+                            {
+                                return self
+                                    .resolve_variant_map_access_pushdown(column.clone(), &mut paths)
+                                    .await;
+                            }
+                        }
+                    }
+                    break;
+                }
+                None
+            }
+            ("array_sort", args) => {
+                if args.is_empty() || args.len() > 3 {
+                    return None;
+                }
+                let mut asc = true;
+                let mut nulls_first = true;
+                if args.len() >= 2 {
+                    let box (arg, _) = self.resolve(args[1]).await.ok()?;
+                    if let Ok(arg) = ConstantExpr::try_from(arg) {
+                        if let Scalar::String(val) = arg.value {
+                            let sort_order = unsafe { std::str::from_utf8_unchecked(&val) };
+                            if sort_order.eq_ignore_ascii_case("asc") {
+                                asc = true;
+                            } else if sort_order.eq_ignore_ascii_case("desc") {
+                                asc = false;
+                            } else {
+                                return Some(Err(ErrorCode::SemanticError(
+                                    "Sorting order must be either ASC or DESC",
+                                )));
+                            }
+                        } else {
+                            return Some(Err(ErrorCode::SemanticError(
+                                "Sorting order must be either ASC or DESC",
+                            )));
+                        }
+                    } else {
+                        return Some(Err(ErrorCode::SemanticError(
+                            "Sorting order must be a constant string",
+                        )));
+                    }
+                }
+                if args.len() == 3 {
+                    let box (arg, _) = self.resolve(args[2]).await.ok()?;
+                    if let Ok(arg) = ConstantExpr::try_from(arg) {
+                        if let Scalar::String(val) = arg.value {
+                            let nulls_order = unsafe { std::str::from_utf8_unchecked(&val) };
+                            if nulls_order.eq_ignore_ascii_case("nulls first") {
+                                nulls_first = true;
+                            } else if nulls_order.eq_ignore_ascii_case("nulls last") {
+                                nulls_first = false;
+                            } else {
+                                return Some(Err(ErrorCode::SemanticError(
+                                    "Null sorting order must be either NULLS FIRST or NULLS LAST",
+                                )));
+                            }
+                        } else {
+                            return Some(Err(ErrorCode::SemanticError(
+                                "Null sorting order must be either NULLS FIRST or NULLS LAST",
+                            )));
+                        }
+                    } else {
+                        return Some(Err(ErrorCode::SemanticError(
+                            "Null sorting order must be a constant string",
+                        )));
+                    }
+                }
+                let func_name = match (asc, nulls_first) {
+                    (true, true) => "array_sort_asc_null_first",
+                    (false, true) => "array_sort_desc_null_first",
+                    (true, false) => "array_sort_asc_null_last",
+                    (false, false) => "array_sort_desc_null_last",
+                };
+                let args_ref: Vec<&Expr> = vec![args[0]];
+                Some(
+                    self.resolve_function(span, func_name, vec![], &args_ref)
+                        .await,
+                )
+            }
+            ("array_aggregate", args) => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let box (arg, _) = self.resolve(args[1]).await.ok()?;
+                if let Ok(arg) = ConstantExpr::try_from(arg) {
+                    if let Scalar::String(arg) = arg.value {
+                        let aggr_func_name = unsafe { std::str::from_utf8_unchecked(&arg) };
+                        let func_name = format!("array_{}", aggr_func_name);
+                        let args_ref: Vec<&Expr> = vec![args[0]];
+                        return Some(
+                            self.resolve_function(span, &func_name, vec![], &args_ref)
+                                .await,
+                        );
+                    }
+                }
+                Some(Err(ErrorCode::SemanticError(
+                    "Aggregate function name be a constant string",
+                )))
             }
             _ => None,
         }
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn resolve_trim_function(
         &mut self,
         span: Span,
@@ -1684,8 +2049,7 @@ impl<'a> TypeChecker<'a> {
         } else {
             let trim_scalar = ConstantExpr {
                 span,
-                value: common_expression::Literal::String(" ".as_bytes().to_vec()),
-                data_type: Box::new(DataType::String),
+                value: common_expression::Scalar::String(" ".as_bytes().to_vec()),
             }
             .into();
             ("trim_both", trim_scalar, DataType::String)
@@ -1702,66 +2066,63 @@ impl<'a> TypeChecker<'a> {
     pub fn resolve_literal(
         &self,
         literal: &common_ast::ast::Literal,
-    ) -> Result<Box<(common_expression::Literal, DataType)>> {
+    ) -> Result<Box<(Scalar, DataType)>> {
         let value = match literal {
             Literal::UInt64(uint) => {
                 // how to use match range?
                 if *uint <= u8::MAX as u64 {
-                    common_expression::Literal::UInt8(*uint as u8)
+                    Scalar::Number(NumberScalar::UInt8(*uint as u8))
                 } else if *uint <= u16::MAX as u64 {
-                    common_expression::Literal::UInt16(*uint as u16)
+                    Scalar::Number(NumberScalar::UInt16(*uint as u16))
                 } else if *uint <= u32::MAX as u64 {
-                    common_expression::Literal::UInt32(*uint as u32)
+                    Scalar::Number(NumberScalar::UInt32(*uint as u32))
                 } else {
-                    common_expression::Literal::UInt64(*uint)
+                    Scalar::Number(NumberScalar::UInt64(*uint))
                 }
             }
             Literal::Int64(int) => {
                 if *int >= i8::MIN as i64 && *int <= i8::MAX as i64 {
-                    common_expression::Literal::Int8(*int as i8)
+                    Scalar::Number(NumberScalar::Int8(*int as i8))
                 } else if *int >= i16::MIN as i64 && *int <= i16::MAX as i64 {
-                    common_expression::Literal::Int16(*int as i16)
+                    Scalar::Number(NumberScalar::Int16(*int as i16))
                 } else if *int >= i32::MIN as i64 && *int <= i32::MAX as i64 {
-                    common_expression::Literal::Int32(*int as i32)
+                    Scalar::Number(NumberScalar::Int32(*int as i32))
                 } else {
-                    common_expression::Literal::Int64(*int)
+                    Scalar::Number(NumberScalar::Int64(*int))
                 }
             }
             Literal::Decimal128 {
                 value,
                 precision,
                 scale,
-            } => common_expression::Literal::Decimal128 {
-                value: *value,
+            } => Scalar::Decimal(DecimalScalar::Decimal128(*value, DecimalSize {
                 precision: *precision,
                 scale: *scale,
-            },
+            })),
             Literal::Decimal256 {
                 value,
                 precision,
                 scale,
-            } => common_expression::Literal::Decimal256 {
-                value: *value,
+            } => Scalar::Decimal(DecimalScalar::Decimal256(*value, DecimalSize {
                 precision: *precision,
                 scale: *scale,
-            },
-            Literal::Float(float) => common_expression::Literal::Float64(F64::from(*float)),
-            Literal::String(string) => {
-                common_expression::Literal::String(string.as_bytes().to_vec())
-            }
-            Literal::Boolean(boolean) => common_expression::Literal::Boolean(*boolean),
-            Literal::Null => common_expression::Literal::Null,
+            })),
+            Literal::Float(float) => Scalar::Number(NumberScalar::Float64((*float).into())),
+            Literal::String(string) => Scalar::String(string.as_bytes().to_vec()),
+            Literal::Boolean(boolean) => Scalar::Boolean(*boolean),
+            Literal::Null => Scalar::Null,
             _ => Err(ErrorCode::SemanticError(format!(
                 "Unsupported literal value: {literal}"
             )))?,
         };
-        let (_, data_type) = check_literal(&value);
+        let data_type = value.as_ref().infer_data_type();
         Ok(Box::new((value, data_type)))
     }
 
     // TODO(leiysky): use an array builder function instead, since we should allow declaring
     // an array with variable as element.
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn resolve_array(
         &mut self,
         span: Span,
@@ -1778,25 +2139,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_recursion::async_recursion]
-    async fn resolve_array_sort(
-        &mut self,
-        span: Span,
-        expr: &Expr,
-        asc: &bool,
-        null_first: &bool,
-    ) -> Result<Box<(ScalarExpr, DataType)>> {
-        let box (arg, _type) = self.resolve(expr).await?;
-        let func_name = match (*asc, *null_first) {
-            (true, true) => "array_sort_asc_null_first",
-            (true, false) => "array_sort_asc_null_last",
-            (false, true) => "array_sort_desc_null_first",
-            (false, false) => "array_sort_desc_null_last",
-        };
-        self.resolve_scalar_function_call(span, func_name, vec![], vec![arg])
-            .await
-    }
-
-    #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn resolve_map(
         &mut self,
         span: Span,
@@ -1823,6 +2166,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn resolve_tuple(
         &mut self,
         span: Span,
@@ -1839,55 +2183,58 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn resolve_udf(
         &mut self,
         span: Span,
         func_name: &str,
         arguments: &[Expr],
-    ) -> Result<Box<(ScalarExpr, DataType)>> {
+    ) -> Result<Option<Box<(ScalarExpr, DataType)>>> {
         let udf = UserApiProvider::instance()
             .get_udf(self.ctx.get_tenant().as_str(), func_name)
             .await;
-        if let Ok(udf) = udf {
-            let parameters = udf.parameters;
-            if parameters.len() != arguments.len() {
-                return Err(ErrorCode::SyntaxException(format!(
-                    "Require {} parameters, but got: {}",
-                    parameters.len(),
-                    arguments.len()
-                ))
-                .set_span(span));
-            }
-            let settings = self.ctx.get_settings();
-            let sql_dialect = settings.get_sql_dialect()?;
-            let sql_tokens = tokenize_sql(udf.definition.as_str())?;
-            let expr = parse_expr(&sql_tokens, sql_dialect)?;
-            let mut args_map = HashMap::new();
-            arguments.iter().enumerate().for_each(|(idx, argument)| {
-                if let Some(parameter) = parameters.get(idx) {
-                    args_map.insert(parameter, (*argument).clone());
-                }
-            });
-            let udf_expr = self
-                .clone_expr_with_replacement(&expr, &|nest_expr| {
-                    if let Expr::ColumnRef { column, .. } = nest_expr {
-                        if let Some(arg) = args_map.get(&column.name) {
-                            return Ok(Some(arg.clone()));
-                        }
-                    }
-                    Ok(None)
-                })
-                .map_err(|e| e.set_span(span))?;
-            self.resolve(&udf_expr).await
+
+        let udf = if let Ok(udf) = udf {
+            udf
         } else {
-            Err(ErrorCode::UnknownFunction(format!(
-                "no function matches the given name: {func_name}"
+            return Ok(None);
+        };
+
+        let parameters = udf.parameters;
+        if parameters.len() != arguments.len() {
+            return Err(ErrorCode::SyntaxException(format!(
+                "Require {} parameters, but got: {}",
+                parameters.len(),
+                arguments.len()
             ))
-            .set_span(span))
+            .set_span(span));
         }
+        let settings = self.ctx.get_settings();
+        let sql_dialect = settings.get_sql_dialect()?;
+        let sql_tokens = tokenize_sql(udf.definition.as_str())?;
+        let expr = parse_expr(&sql_tokens, sql_dialect)?;
+        let mut args_map = HashMap::new();
+        arguments.iter().enumerate().for_each(|(idx, argument)| {
+            if let Some(parameter) = parameters.get(idx) {
+                args_map.insert(parameter, (*argument).clone());
+            }
+        });
+        let udf_expr = self
+            .clone_expr_with_replacement(&expr, &|nest_expr| {
+                if let Expr::ColumnRef { column, .. } = nest_expr {
+                    if let Some(arg) = args_map.get(&column.name) {
+                        return Ok(Some(arg.clone()));
+                    }
+                }
+                Ok(None)
+            })
+            .map_err(|e| e.set_span(span))?;
+
+        Ok(Some(self.resolve(&udf_expr).await?))
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn resolve_map_access(
         &mut self,
         expr: &Expr,
@@ -1895,26 +2242,35 @@ impl<'a> TypeChecker<'a> {
     ) -> Result<Box<(ScalarExpr, DataType)>> {
         let box (mut scalar, data_type) = self.resolve(expr).await?;
         let mut table_data_type = infer_schema_type(&data_type)?;
-        // If it's map accessors to a tuple column, pushdown the map accessors to storage.
-        if let Expr::ColumnRef { column: ident, .. } = expr {
-            if let ScalarExpr::BoundColumnRef(BoundColumnRef { ref column, .. }) = scalar {
-                let column_entry = self.metadata.read().column(column.index).clone();
-                if let ColumnEntry::BaseTableColumn(BaseTableColumn { data_type, .. }) =
-                    column_entry
-                {
-                    table_data_type = data_type;
-                    if let TableDataType::Tuple { .. } = table_data_type {
-                        let box (inner_scalar, _inner_data_type) = self
-                            .resolve_tuple_map_access_pushdown(
-                                ident.span,
-                                column.clone(),
-                                &mut table_data_type,
-                                &mut paths,
-                            )
-                            .await?;
-                        scalar = inner_scalar;
+        // If it is a tuple column, convert it to the internal column specified by the paths.
+        // If it is a variant column, try convert it to a virtual column.
+        // For other types of columns, convert it to get functions.
+        if let ScalarExpr::BoundColumnRef(BoundColumnRef { ref column, .. }) = scalar {
+            let column_entry = self.metadata.read().column(column.index).clone();
+            if let ColumnEntry::BaseTableColumn(BaseTableColumn { data_type, .. }) = column_entry {
+                table_data_type = data_type;
+            }
+            match table_data_type.remove_nullable() {
+                TableDataType::Tuple { .. } => {
+                    let box (inner_scalar, _inner_data_type) = self
+                        .resolve_tuple_map_access_pushdown(
+                            expr.span(),
+                            column.clone(),
+                            &mut table_data_type,
+                            &mut paths,
+                        )
+                        .await?;
+                    scalar = inner_scalar;
+                }
+                TableDataType::Variant => {
+                    if let Some(result) = self
+                        .resolve_variant_map_access_pushdown(column.clone(), &mut paths)
+                        .await
+                    {
+                        return result;
                     }
                 }
+                _ => {}
             }
         }
 
@@ -1966,11 +2322,10 @@ impl<'a> TypeChecker<'a> {
                 .into();
                 continue;
             }
-            let box (path_value, path_data_type) = self.resolve_literal(&path_lit)?;
+            let box (path_value, _) = self.resolve_literal(&path_lit)?;
             let path_scalar: ScalarExpr = ConstantExpr {
                 span,
                 value: path_value,
-                data_type: Box::new(path_data_type.clone()),
             }
             .into();
             if let TableDataType::Array(inner_type) = table_data_type {
@@ -1990,6 +2345,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_recursion::async_recursion]
+    #[async_backtrace::framed]
     async fn resolve_tuple_map_access_pushdown(
         &mut self,
         span: Span,
@@ -2094,6 +2450,97 @@ impl<'a> TypeChecker<'a> {
                 Ok(Box::new((scalar, return_type)))
             }
         }
+    }
+
+    #[async_recursion::async_recursion]
+    async fn resolve_variant_map_access_pushdown(
+        &mut self,
+        column: ColumnBinding,
+        paths: &mut VecDeque<(Span, Literal)>,
+    ) -> Option<Result<Box<(ScalarExpr, DataType)>>> {
+        let table_index = self
+            .metadata
+            .read()
+            .get_table_index(
+                column.database_name.as_deref(),
+                column.table_name.as_deref().unwrap(),
+            )
+            .unwrap();
+
+        if !self
+            .metadata
+            .read()
+            .table(table_index)
+            .table()
+            .support_virtual_columns()
+        {
+            return None;
+        }
+
+        let mut name = String::new();
+        name.push('_');
+        name.push_str(&column.column_name);
+        let mut json_paths = Vec::with_capacity(paths.len());
+        while let Some((_, path)) = paths.pop_front() {
+            name.push('[');
+            let json_path = match path {
+                Literal::UInt64(idx) => {
+                    name.push_str(&idx.to_string());
+                    Scalar::Number(NumberScalar::UInt64(idx))
+                }
+                Literal::String(field) => {
+                    name.push('\'');
+                    name.push_str(field.as_ref());
+                    name.push('\'');
+                    Scalar::String(field.into_bytes())
+                }
+                _ => unreachable!(),
+            };
+            name.push(']');
+            json_paths.push(json_path);
+        }
+
+        let mut index = 0;
+        // Check for duplicate virtual columns
+        for column in self
+            .metadata
+            .read()
+            .virtual_columns_by_table_index(table_index)
+        {
+            if column.name() == name {
+                index = column.index();
+                break;
+            }
+        }
+
+        if index == 0 {
+            let table_data_type = TableDataType::Nullable(Box::new(TableDataType::Variant));
+            index = self.metadata.write().add_virtual_column(
+                table_index,
+                column.column_name.clone(),
+                column.index,
+                name.clone(),
+                table_data_type,
+                json_paths,
+            );
+        }
+
+        let data_type = DataType::Nullable(Box::new(DataType::Variant));
+        let virtual_column = ColumnBinding {
+            database_name: column.database_name.clone(),
+            table_name: column.table_name.clone(),
+            table_index: Some(table_index),
+            column_name: name,
+            index,
+            data_type: Box::new(data_type.clone()),
+            visibility: Visibility::InVisible,
+        };
+        let scalar = ScalarExpr::BoundColumnRef(BoundColumnRef {
+            span: None,
+            column: virtual_column,
+        });
+
+        Some(Ok(Box::new((scalar, data_type))))
     }
 
     #[allow(clippy::only_used_in_recursion)]
@@ -2335,19 +2782,6 @@ impl<'a> TypeChecker<'a> {
                         .iter()
                         .map(|expr| self.clone_expr_with_replacement(expr, replacement_fn))
                         .collect::<Result<Vec<Expr>>>()?,
-                }),
-                Expr::ArraySort {
-                    span,
-                    expr,
-                    asc,
-                    null_first,
-                } => Ok(Expr::ArraySort {
-                    span: *span,
-                    expr: Box::new(
-                        self.clone_expr_with_replacement(expr.as_ref(), replacement_fn)?,
-                    ),
-                    asc: *asc,
-                    null_first: *null_first,
                 }),
                 Expr::Interval { span, expr, unit } => Ok(Expr::Interval {
                     span: *span,

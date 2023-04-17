@@ -57,18 +57,18 @@ echo 'Start databend-query node-1'
 env RUST_BACKTRACE=1 RUST_LOG=DEBUG,opendal::layers=INFO OTEL_BSP_SCHEDULE_DELAY=1 DATABEND_JAEGER_AGENT_ENDPOINT=172.17.0.3:6831 NODE_NAME=node1 nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-1.toml --internal-enable-sandbox-tenant &
 
 echo "Waiting on node-1..."
-python3 scripts/ci/wait_tcp.py --timeout 10 --port 9091
+python3 scripts/ci/wait_tcp.py --timeout 30 --port 9091
 
 echo 'Start databend-query node-2'
 env RUST_BACKTRACE=1 RUST_LOG=DEBUG,opendal::layers=INFO OTEL_BSP_SCHEDULE_DELAY=1 DATABEND_JAEGER_AGENT_ENDPOINT=172.17.0.3:6831 NODE_NAME=node2 nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-2.toml --internal-enable-sandbox-tenant &
 
 echo "Waiting on node-2..."
-python3 scripts/ci/wait_tcp.py --timeout 10 --port 9092
+python3 scripts/ci/wait_tcp.py --timeout 30 --port 9092
 
 echo 'Start databend-query node-3'
 env RUST_BACKTRACE=1 RUST_LOG=DEBUG,opendal::layers=INFO OTEL_BSP_SCHEDULE_DELAY=1 DATABEND_JAEGER_AGENT_ENDPOINT=172.17.0.3:6831 NODE_NAME=node3 nohup target/${BUILD_PROFILE}/databend-query -c scripts/ci/deploy/config/databend-query-node-3.toml --internal-enable-sandbox-tenant &
 
 echo "Waiting on node-3..."
-python3 scripts/ci/wait_tcp.py --timeout 10 --port 9093
+python3 scripts/ci/wait_tcp.py --timeout 30 --port 9093
 
 echo "All done..."

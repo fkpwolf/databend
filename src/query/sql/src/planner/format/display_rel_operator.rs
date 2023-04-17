@@ -20,12 +20,10 @@ use itertools::Itertools;
 use crate::optimizer::SExpr;
 use crate::plans::Aggregate;
 use crate::plans::AggregateMode;
-use crate::plans::AndExpr;
-use crate::plans::ComparisonExpr;
-use crate::plans::ComparisonOp;
 use crate::plans::EvalScalar;
 use crate::plans::Exchange;
 use crate::plans::Filter;
+use crate::plans::FunctionCall;
 use crate::plans::Join;
 use crate::plans::JoinType;
 use crate::plans::Limit;
@@ -33,11 +31,8 @@ use crate::plans::RelOperator;
 use crate::plans::ScalarExpr;
 use crate::plans::Scan;
 use crate::plans::Sort;
-use crate::BaseTableColumn;
-use crate::ColumnEntry;
-use crate::DerivedColumn;
+use crate::plans::Window;
 use crate::MetadataRef;
-use crate::TableInternalColumn;
 
 #[derive(Clone)]
 pub enum FormatContext {
@@ -80,6 +75,7 @@ impl Display for FormatContext {
                 RelOperator::DummyTableScan(_) => write!(f, "DummyTableScan"),
                 RelOperator::RuntimeFilterSource(_) => write!(f, "RuntimeFilterSource"),
                 RelOperator::Window(_) => write!(f, "WindowFunc"),
+                RelOperator::ProjectSet(_) => write!(f, "ProjectSet"),
             },
             Self::Text(text) => write!(f, "{}", text),
         }
@@ -118,24 +114,7 @@ pub fn format_scalar(_metadata: &MetadataRef, scalar: &ScalarExpr) -> String {
             }
         }
         ScalarExpr::ConstantExpr(constant) => constant.value.to_string(),
-        ScalarExpr::AndExpr(and) => format!(
-            "({}) AND ({})",
-            format_scalar(_metadata, &and.left),
-            format_scalar(_metadata, &and.right)
-        ),
-        ScalarExpr::OrExpr(or) => format!(
-            "({}) OR ({})",
-            format_scalar(_metadata, &or.left),
-            format_scalar(_metadata, &or.right)
-        ),
-        ScalarExpr::NotExpr(not) => format!("NOT ({})", format_scalar(_metadata, &not.argument),),
-        ScalarExpr::ComparisonExpr(comp) => format!(
-            "{} {} {}",
-            format_scalar(_metadata, &comp.left),
-            comp.op.to_func_name(),
-            format_scalar(_metadata, &comp.right)
-        ),
-        ScalarExpr::WindowFunction(win) => win.agg_func.display_name.clone(),
+        ScalarExpr::WindowFunction(win) => win.display_name.clone(),
         ScalarExpr::AggregateFunction(agg) => agg.display_name.clone(),
         ScalarExpr::FunctionCall(func) => {
             format!(
@@ -154,9 +133,6 @@ pub fn format_scalar(_metadata: &MetadataRef, scalar: &ScalarExpr) -> String {
                 format_scalar(_metadata, &cast.argument),
                 cast.target_type
             )
-        }
-        ScalarExpr::Unnest(unnest) => {
-            format!("UNNEST({})", format_scalar(_metadata, &unnest.argument),)
         }
         ScalarExpr::SubqueryExpr(_) => "SUBQUERY".to_string(),
     }
@@ -223,6 +199,7 @@ fn to_format_tree(
         RelOperator::EvalScalar(op) => eval_scalar_to_format_tree(op, metadata, children),
         RelOperator::Filter(op) => filter_to_format_tree(op, metadata, children),
         RelOperator::Aggregate(op) => aggregate_to_format_tree(op, metadata, children),
+        RelOperator::Window(op) => window_to_format_tree(op, metadata, children),
         RelOperator::Sort(op) => sort_to_format_tree(op, metadata, children),
         RelOperator::Limit(op) => limit_to_format_tree(op, metadata, children),
         RelOperator::Exchange(op) => exchange_to_format_tree(op, metadata, children),
@@ -277,18 +254,7 @@ fn scan_to_format_tree(
                             .iter()
                             .map(|item| format!(
                                 "{} (#{}) {}",
-                                match metadata.read().column(item.index) {
-                                    ColumnEntry::BaseTableColumn(BaseTableColumn {
-                                        column_name,
-                                        ..
-                                    }) => column_name,
-                                    ColumnEntry::DerivedColumn(DerivedColumn { alias, .. }) =>
-                                        alias,
-                                    ColumnEntry::InternalColumn(TableInternalColumn {
-                                        internal_column,
-                                        ..
-                                    }) => internal_column.column_name(),
-                                },
+                                metadata.read().column(item.index).name(),
                                 item.index,
                                 if item.asc { "ASC" } else { "DESC" }
                             ))
@@ -346,18 +312,7 @@ fn logical_get_to_format_tree(
                             .iter()
                             .map(|item| format!(
                                 "{} (#{}) {}",
-                                match metadata.read().column(item.index) {
-                                    ColumnEntry::BaseTableColumn(BaseTableColumn {
-                                        column_name,
-                                        ..
-                                    }) => column_name,
-                                    ColumnEntry::DerivedColumn(DerivedColumn { alias, .. }) =>
-                                        alias,
-                                    ColumnEntry::InternalColumn(TableInternalColumn {
-                                        internal_column,
-                                        ..
-                                    }) => internal_column.column_name(),
-                                },
+                                metadata.read().column(item.index).name(),
                                 item.index,
                                 if item.asc { "ASC" } else { "DESC" }
                             ))
@@ -386,10 +341,11 @@ pub fn logical_join_to_format_tree(
         .iter()
         .zip(op.right_conditions.iter())
         .map(|(left, right)| {
-            ComparisonExpr {
-                op: ComparisonOp::Equal,
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
+            FunctionCall {
+                span: None,
+                func_name: "eq".to_string(),
+                params: vec![],
+                arguments: vec![left.clone(), right.clone()],
             }
             .into()
         })
@@ -402,9 +358,11 @@ pub fn logical_join_to_format_tree(
 
     let equi_conditions = if !preds.is_empty() {
         let pred = preds.iter().skip(1).fold(preds[0].clone(), |prev, next| {
-            ScalarExpr::AndExpr(AndExpr {
-                left: Box::new(prev),
-                right: Box::new(next.clone()),
+            ScalarExpr::FunctionCall(FunctionCall {
+                span: None,
+                func_name: "and".to_string(),
+                params: vec![],
+                arguments: vec![prev, next.clone()],
             })
         });
         format_scalar(&metadata, &pred)
@@ -518,6 +476,54 @@ fn aggregate_to_format_tree(
     )
 }
 
+fn window_to_format_tree(
+    op: &Window,
+    metadata: MetadataRef,
+    children: Vec<FormatTreeNode<FormatContext>>,
+) -> FormatTreeNode<FormatContext> {
+    let partition_by_items = op
+        .partition_by
+        .iter()
+        .map(|item| format_scalar(&metadata, &item.scalar))
+        .collect::<Vec<String>>()
+        .join(", ");
+
+    let order_by_items = op
+        .order_by
+        .iter()
+        .map(|item| format_scalar(&metadata, &item.order_by_item.scalar))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let frame = op.frame.to_string();
+
+    FormatTreeNode::with_children(
+        FormatContext::RelOp {
+            metadata,
+            rel_operator: Box::new(op.clone().into()),
+        },
+        vec![
+            vec![
+                FormatTreeNode::new(FormatContext::Text(format!(
+                    "aggregate function: {}",
+                    op.function.func_name()
+                ))),
+                FormatTreeNode::new(FormatContext::Text(format!(
+                    "partition items: [{}]",
+                    partition_by_items
+                ))),
+                FormatTreeNode::new(FormatContext::Text(format!(
+                    "order by items: [{}]",
+                    order_by_items
+                ))),
+                FormatTreeNode::new(FormatContext::Text(format!("frame: [{}]", frame))),
+            ],
+            children,
+        ]
+        .concat(),
+    )
+}
+
 fn filter_to_format_tree(
     op: &Filter,
     metadata: MetadataRef,
@@ -582,17 +588,9 @@ fn sort_to_format_tree(
         .items
         .iter()
         .map(|item| {
-            let metadata = metadata.read();
-            let name = match metadata.column(item.index) {
-                ColumnEntry::BaseTableColumn(BaseTableColumn { column_name, .. }) => column_name,
-                ColumnEntry::DerivedColumn(DerivedColumn { alias, .. }) => alias,
-                ColumnEntry::InternalColumn(TableInternalColumn {
-                    internal_column, ..
-                }) => internal_column.column_name(),
-            };
             format!(
                 "{} (#{}) {}",
-                name,
+                metadata.read().column(item.index).name(),
                 item.index,
                 if item.asc { "ASC" } else { "DESC" }
             )

@@ -14,28 +14,68 @@
 
 use std::collections::BTreeMap;
 
+use chrono::DateTime;
+use chrono::Utc;
 use common_exception::Result;
 use common_meta_app::share::ShareDatabaseSpec;
 use common_meta_app::share::ShareSpec;
+use common_meta_app::share::ShareTableInfoMap;
 use common_meta_app::share::ShareTableSpec;
 use opendal::Operator;
 
-pub const SHARE_CONFIG_PREFIX: &str = "_share_config";
+const SHARE_CONFIG_PREFIX: &str = "_share_config";
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ShareSpecVec {
     share_specs: BTreeMap<String, ext::ShareSpecExt>,
 }
 
+pub fn get_share_spec_location(tenant: &String) -> String {
+    format!("{}/{}/share_specs.json", SHARE_CONFIG_PREFIX, tenant,)
+}
+
+pub fn share_table_info_location(tenant: &str, share_name: &str) -> String {
+    format!(
+        "{}/{}/{}_table_info.json",
+        SHARE_CONFIG_PREFIX, tenant, share_name
+    )
+}
+
+#[async_backtrace::framed]
+pub async fn save_share_table_info(
+    tenant: &str,
+    operator: Operator,
+    share_table_info: Vec<ShareTableInfoMap>,
+) -> Result<()> {
+    for (share_name, share_table_info) in share_table_info {
+        let share_name = share_name.clone();
+        let location = share_table_info_location(tenant, &share_name);
+        match share_table_info {
+            Some(table_info_map) => {
+                operator
+                    .write(&location, serde_json::to_vec(&table_info_map)?)
+                    .await?;
+            }
+            None => {
+                operator.delete(&location).await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[async_backtrace::framed]
 pub async fn save_share_spec(
     tenant: &String,
     operator: Operator,
     spec_vec: Option<Vec<ShareSpec>>,
+    share_table_info: Option<Vec<ShareTableInfoMap>>,
 ) -> Result<()> {
-    if let Some(spec_vec) = spec_vec {
-        let location = format!("{}/{}/share_specs.json", tenant, SHARE_CONFIG_PREFIX);
+    if let Some(share_spec) = spec_vec {
+        let location = get_share_spec_location(tenant);
         let mut share_spec_vec = ShareSpecVec::default();
-        for spec in spec_vec {
+        for spec in share_spec {
             let share_name = spec.name.clone();
             let share_spec_ext = ext::ShareSpecExt::from_share_spec(spec, &operator);
             share_spec_vec
@@ -47,10 +87,17 @@ pub async fn save_share_spec(
             .await?;
     }
 
+    // save share table info
+    if let Some(share_table_info) = share_table_info {
+        save_share_table_info(tenant, operator, share_table_info).await?
+    }
+
     Ok(())
 }
 
 mod ext {
+    use common_meta_app::share::ShareGrantObjectPrivilege;
+    use enumflags2::BitFlags;
     use storages_common_table_meta::table::database_storage_prefix;
     use storages_common_table_meta::table::table_storage_prefix;
 
@@ -73,6 +120,9 @@ mod ext {
         database: Option<WithLocation<ShareDatabaseSpec>>,
         tables: Vec<WithLocation<ShareTableSpec>>,
         tenants: Vec<String>,
+        db_privileges: Option<BitFlags<ShareGrantObjectPrivilege>>,
+        comment: Option<String>,
+        share_on: Option<DateTime<Utc>>,
     }
 
     impl ShareSpecExt {
@@ -98,6 +148,9 @@ mod ext {
                     })
                     .collect(),
                 tenants: spec.tenants,
+                db_privileges: spec.db_privileges,
+                comment: spec.comment.clone(),
+                share_on: spec.share_on,
             }
         }
     }
@@ -151,6 +204,9 @@ mod ext {
                     presigned_url_timeout: "100s".to_string(),
                 }],
                 tenants: vec!["test_tenant".to_owned()],
+                comment: None,
+                share_on: None,
+                db_privileges: None,
             };
             let tmp_dir = tempfile::tempdir()?;
             let test_root = tmp_dir.path().join("test_cluster_id/test_tenant_id");
@@ -165,11 +221,12 @@ mod ext {
             let spec_json_value = serde_json::to_value(share_spec_ext).unwrap();
 
             use serde_json::json;
+            use serde_json::Value::Null;
 
             let expected = json!({
               "name": "test_share_name",
-              "version": 1,
               "share_id": 1,
+              "version": 1,
               "database": {
                 "location": format!("{}/1/", test_root_str),
                 "name": "share_database",
@@ -186,7 +243,10 @@ mod ext {
               ],
               "tenants": [
                 "test_tenant"
-              ]
+              ],
+              "db_privileges": Null,
+              "comment": Null,
+              "share_on": Null
             });
 
             assert_eq!(expected, spec_json_value);

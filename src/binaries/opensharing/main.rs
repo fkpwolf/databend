@@ -13,25 +13,44 @@
 // limitations under the License.
 
 use common_base::base::tokio;
+use common_config::DATABEND_COMMIT_VERSION;
 use poem::listener::TcpListener;
 use poem::EndpointExt;
 use poem::Route;
 use poem::Server;
 use sharing_endpoint::configs::Config;
-use sharing_endpoint::handlers::presign_files;
+use sharing_endpoint::handlers::share_spec;
+use sharing_endpoint::handlers::share_table_meta;
+use sharing_endpoint::handlers::share_table_presign_files;
 use sharing_endpoint::middlewares::SharingAuth;
 use sharing_endpoint::services::SharingServices;
+
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
     let config = Config::load().expect("cfgs");
+    // Print information to users.
+    println!("Databend open-sharing");
+    println!();
+    println!("Version: {}", *DATABEND_COMMIT_VERSION);
+    println!();
+    println!("open open-sharing config: {:?}", config);
+
     SharingServices::init(config.clone())
         .await
         .expect("failed to init sharing service");
     let app = Route::new()
+        // handler for share table presign
         .at(
             "/tenant/:tenant_id/:share_name/table/:table_name/presign",
-            poem::post(presign_files),
+            poem::post(share_table_presign_files),
         )
+        // handler for accessing share table meta
+        .at(
+            "/tenant/:tenant_id/:share_name/meta",
+            poem::post(share_table_meta),
+        )
+        // handler for accessing share spec
+        .at("/tenant/:tenant_id/share_spec", poem::post(share_spec))
         .with(SharingAuth);
 
     Server::new(TcpListener::bind(config.share_endpoint_address))

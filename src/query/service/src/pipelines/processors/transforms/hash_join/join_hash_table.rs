@@ -31,7 +31,7 @@ use common_expression::HashMethodKind;
 use common_expression::HashMethodSerializer;
 use common_expression::HashMethodSingleString;
 use common_expression::RemoteExpr;
-use common_functions::scalars::BUILTIN_FUNCTIONS;
+use common_functions::BUILTIN_FUNCTIONS;
 use common_hashtable::HashMap;
 use common_hashtable::HashtableKeyable;
 use common_hashtable::ShortStringHashMap;
@@ -243,7 +243,7 @@ impl JoinHashTable {
                 .collect::<Vec<_>>();
             input = DataBlock::new(nullable_columns, input.num_rows());
         }
-        let evaluator = Evaluator::new(&input, func_ctx, &BUILTIN_FUNCTIONS);
+        let evaluator = Evaluator::new(&input, &func_ctx, &BUILTIN_FUNCTIONS);
 
         let probe_keys = self
             .hash_join_desc

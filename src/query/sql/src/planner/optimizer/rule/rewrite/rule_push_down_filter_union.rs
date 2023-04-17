@@ -21,20 +21,17 @@ use crate::optimizer::rule::TransformResult;
 use crate::optimizer::RuleID;
 use crate::optimizer::SExpr;
 use crate::plans::AggregateFunction;
-use crate::plans::AndExpr;
 use crate::plans::BoundColumnRef;
 use crate::plans::CastExpr;
-use crate::plans::ComparisonExpr;
 use crate::plans::Filter;
 use crate::plans::FunctionCall;
-use crate::plans::NotExpr;
-use crate::plans::OrExpr;
 use crate::plans::PatternPlan;
 use crate::plans::RelOp;
 use crate::plans::ScalarExpr;
 use crate::plans::UnionAll;
-use crate::plans::Unnest;
 use crate::plans::WindowFunc;
+use crate::plans::WindowFuncType;
+use crate::plans::WindowOrderBy;
 use crate::ColumnBinding;
 use crate::IndexType;
 use crate::Visibility;
@@ -47,7 +44,7 @@ use crate::Visibility;
 // So it'll be efficient to push down `filter` to `union`, reduce the size of data to pull from table.
 pub struct RulePushDownFilterUnion {
     id: RuleID,
-    pattern: SExpr,
+    patterns: Vec<SExpr>,
 }
 
 impl RulePushDownFilterUnion {
@@ -59,7 +56,7 @@ impl RulePushDownFilterUnion {
             //   UnionAll
             //     /  \
             //   ...   ...
-            pattern: SExpr::create_unary(
+            patterns: vec![SExpr::create_unary(
                 PatternPlan {
                     plan_type: RelOp::Filter,
                 }
@@ -82,7 +79,7 @@ impl RulePushDownFilterUnion {
                         .into(),
                     ),
                 ),
-            ),
+            )],
         }
     }
 }
@@ -123,8 +120,8 @@ impl Rule for RulePushDownFilterUnion {
         Ok(())
     }
 
-    fn pattern(&self) -> &SExpr {
-        &self.pattern
+    fn patterns(&self) -> &Vec<SExpr> {
+        &self.patterns
     }
 }
 
@@ -139,6 +136,7 @@ fn replace_column_binding(
                 let new_column = ColumnBinding {
                     database_name: None,
                     table_name: None,
+                    table_index: None,
                     column_name: column.column.column_name.clone(),
                     index: *index_pairs.get(&index).unwrap(),
                     data_type: column.column.data_type,
@@ -155,37 +153,39 @@ fn replace_column_binding(
             unreachable!()
         }
         constant_expr @ ScalarExpr::ConstantExpr(_) => Ok(constant_expr),
-        ScalarExpr::AndExpr(expr) => Ok(ScalarExpr::AndExpr(AndExpr {
-            left: Box::new(replace_column_binding(index_pairs, *expr.left)?),
-            right: Box::new(replace_column_binding(index_pairs, *expr.right)?),
-        })),
-        ScalarExpr::OrExpr(expr) => Ok(ScalarExpr::OrExpr(OrExpr {
-            left: Box::new(replace_column_binding(index_pairs, *expr.left)?),
-            right: Box::new(replace_column_binding(index_pairs, *expr.right)?),
-        })),
-        ScalarExpr::NotExpr(expr) => Ok(ScalarExpr::NotExpr(NotExpr {
-            argument: Box::new(replace_column_binding(index_pairs, *expr.argument)?),
-        })),
-        ScalarExpr::ComparisonExpr(expr) => Ok(ScalarExpr::ComparisonExpr(ComparisonExpr {
-            op: expr.op,
-            left: Box::new(replace_column_binding(index_pairs, *expr.left)?),
-            right: Box::new(replace_column_binding(index_pairs, *expr.right)?),
-        })),
         ScalarExpr::WindowFunction(expr) => Ok(ScalarExpr::WindowFunction(WindowFunc {
-            agg_func: AggregateFunction {
-                display_name: expr.agg_func.display_name,
-                func_name: expr.agg_func.func_name,
-                distinct: expr.agg_func.distinct,
-                params: expr.agg_func.params,
-                args: expr
-                    .agg_func
-                    .args
-                    .into_iter()
-                    .map(|arg| replace_column_binding(index_pairs, arg))
-                    .collect::<Result<Vec<_>>>()?,
-                return_type: expr.agg_func.return_type,
+            display_name: expr.display_name,
+            func: match expr.func {
+                WindowFuncType::Aggregate(arg) => WindowFuncType::Aggregate(AggregateFunction {
+                    display_name: arg.display_name,
+                    func_name: arg.func_name,
+                    distinct: arg.distinct,
+                    params: arg.params,
+                    args: arg
+                        .args
+                        .into_iter()
+                        .map(|arg| replace_column_binding(index_pairs, arg))
+                        .collect::<Result<Vec<_>>>()?,
+                    return_type: arg.return_type,
+                }),
+                t => t,
             },
-            partition_by: expr.partition_by,
+            partition_by: expr
+                .partition_by
+                .into_iter()
+                .map(|p| replace_column_binding(index_pairs, p))
+                .collect::<Result<Vec<_>>>()?,
+            order_by: expr
+                .order_by
+                .into_iter()
+                .map(|p| {
+                    Ok(WindowOrderBy {
+                        expr: replace_column_binding(index_pairs, p.expr)?,
+                        asc: p.asc,
+                        nulls_first: p.nulls_first,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
             frame: expr.frame,
         })),
         ScalarExpr::AggregateFunction(expr) => {
@@ -221,9 +221,5 @@ fn replace_column_binding(
         ScalarExpr::SubqueryExpr(_) => Err(ErrorCode::Unimplemented(
             "replace_column_binding: don't support subquery",
         )),
-        ScalarExpr::Unnest(expr) => Ok(ScalarExpr::Unnest(Unnest {
-            argument: Box::new(replace_column_binding(index_pairs, *expr.argument)?),
-            return_type: expr.return_type,
-        })),
     }
 }

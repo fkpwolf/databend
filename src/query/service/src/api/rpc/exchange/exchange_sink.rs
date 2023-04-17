@@ -23,8 +23,8 @@ use common_pipeline_core::pipe::PipeItem;
 use common_pipeline_core::processors::processor::ProcessorPtr;
 
 use crate::api::rpc::exchange::exchange_params::ExchangeParams;
+use crate::api::rpc::exchange::exchange_sink_writer::create_writer_item;
 use crate::api::rpc::exchange::exchange_sink_writer::create_writer_items;
-use crate::api::rpc::exchange::exchange_sink_writer::ExchangeWriterSink;
 use crate::api::rpc::exchange::exchange_sorting::ExchangeSorting;
 use crate::api::rpc::exchange::exchange_sorting::TransformExchangeSorting;
 use crate::api::rpc::exchange::exchange_transform_shuffle::exchange_shuffle;
@@ -43,7 +43,7 @@ impl ExchangeSink {
         pipeline: &mut Pipeline,
     ) -> Result<()> {
         let exchange_manager = ctx.get_exchange_manager();
-        let mut flight_exchanges = exchange_manager.get_flight_exchanges(params)?;
+        let mut flight_senders = exchange_manager.get_flight_sender(params)?;
 
         match params {
             ExchangeParams::MergeExchange(params) => {
@@ -74,27 +74,18 @@ impl ExchangeSink {
                     )]));
                 }
 
-                assert_eq!(flight_exchanges.len(), 1);
-                let flight_exchange = flight_exchanges.remove(0);
-                pipeline.add_sink(|input| {
-                    Ok(ProcessorPtr::create(ExchangeWriterSink::create(
-                        input,
-                        flight_exchange.clone(),
-                        params.query_id.to_string(),
-                        params.fragment_id,
-                    )))
-                })
+                pipeline.resize(1)?;
+                assert_eq!(flight_senders.len(), 1);
+                let item = create_writer_item(flight_senders.remove(0));
+                pipeline.add_pipe(Pipe::create(1, 0, vec![item]));
+                Ok(())
             }
             ExchangeParams::ShuffleExchange(params) => {
                 exchange_shuffle(params, pipeline)?;
 
                 // exchange writer sink
                 let len = pipeline.output_len();
-                let items = create_writer_items(
-                    flight_exchanges,
-                    params.query_id.clone(),
-                    params.fragment_id,
-                );
+                let items = create_writer_items(flight_senders);
                 pipeline.add_pipe(Pipe::create(len, 0, items));
                 Ok(())
             }

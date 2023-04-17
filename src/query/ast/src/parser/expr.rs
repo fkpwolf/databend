@@ -284,7 +284,7 @@ pub enum ExprElement {
         distinct: bool,
         name: Identifier,
         args: Vec<Expr>,
-        window: Option<WindowSpec>,
+        window: Option<Window>,
         params: Vec<Literal>,
     },
     /// `CASE ... WHEN ... ELSE ...` expression
@@ -313,14 +313,6 @@ pub enum ExprElement {
     /// `[1, 2, 3]`
     Array {
         exprs: Vec<Expr>,
-    },
-    /// ARRAY_SORT([1,2,3], ASC|DESC, NULLS FIRST|LAST)
-    ArraySort {
-        expr: Box<Expr>,
-        // Optional `ASC` or `DESC`
-        asc: Option<String>,
-        // Optional `NULLS FIRST` or `NULLS LAST`
-        nulls_first: Option<String>,
     },
     /// `{'k1':'v1','k2':'v2'}`
     Map {
@@ -392,6 +384,7 @@ impl<'a, I: Iterator<Item = WithSpan<'a, ExprElement>>> PrattParser<I> for ExprP
                 BinaryOperator::NotRegexp => Affix::Infix(Precedence(20), Associativity::Left),
                 BinaryOperator::RLike => Affix::Infix(Precedence(20), Associativity::Left),
                 BinaryOperator::NotRLike => Affix::Infix(Precedence(20), Associativity::Left),
+                BinaryOperator::SoundsLike => Affix::Infix(Precedence(20), Associativity::Left),
 
                 BinaryOperator::BitwiseOr => Affix::Infix(Precedence(22), Associativity::Left),
                 BinaryOperator::BitwiseAnd => Affix::Infix(Precedence(22), Associativity::Left),
@@ -525,41 +518,6 @@ impl<'a, I: Iterator<Item = WithSpan<'a, ExprElement>>> PrattParser<I> for ExprP
                 span: transform_span(elem.span.0),
                 exprs,
             },
-            ExprElement::ArraySort {
-                expr,
-                asc,
-                nulls_first,
-            } => {
-                let asc = if let Some(asc) = asc {
-                    if asc.to_lowercase() == "asc" {
-                        true
-                    } else if asc.to_lowercase() == "desc" {
-                        false
-                    } else {
-                        return Err("Sorting order must be either ASC or DESC");
-                    }
-                } else {
-                    true
-                };
-                let null_first = if let Some(nulls_first) = nulls_first {
-                    let null_first = nulls_first.trim().to_lowercase();
-                    if null_first == "nulls first" {
-                        true
-                    } else if null_first == "nulls last" {
-                        false
-                    } else {
-                        return Err("Null sorting order must be either NULLS FIRST or NULLS LAST");
-                    }
-                } else {
-                    true
-                };
-                Expr::ArraySort {
-                    span: transform_span(elem.span.0),
-                    expr,
-                    asc,
-                    null_first,
-                }
-            }
             ExprElement::Map { kvs } => Expr::Map {
                 span: transform_span(elem.span.0),
                 kvs,
@@ -848,41 +806,6 @@ pub fn expr_element(i: Input) -> IResult<WithSpan<ExprElement>> {
         },
     );
 
-    let window_frame_between = alt((
-        map(
-            rule! { BETWEEN ~ #window_frame_bound ~ AND ~ #window_frame_bound },
-            |(_, s, _, e)| (s, e),
-        ),
-        map(rule! {#window_frame_bound}, |s| {
-            (s, WindowFrameBound::Following(None))
-        }),
-    ));
-
-    let window_spec = map(
-        rule! {
-            (PARTITION ~ ^BY ~ #comma_separated_list1(subexpr(0)))?
-            ~ ( ORDER ~ ^BY ~ ^#comma_separated_list1(order_by_expr) )?
-            ~ ((ROWS | RANGE) ~ #window_frame_between)?
-        },
-        |(opt_partition, opt_order, between)| WindowSpec {
-            partition_by: opt_partition.map(|x| x.2).unwrap_or_default(),
-            order_by: opt_order.map(|x| x.2).unwrap_or_default(),
-            window_frame: between.map(|x| {
-                let unit = match x.0.kind {
-                    ROWS => WindowFrameUnits::Rows,
-                    RANGE => WindowFrameUnits::Range,
-                    _ => unreachable!(),
-                };
-                let bw = x.1;
-                WindowFrame {
-                    units: unit,
-                    start_bound: bw.0,
-                    end_bound: bw.1,
-                }
-            }),
-        },
-    );
-
     let function_call = map(
         rule! {
             #function_name
@@ -901,14 +824,14 @@ pub fn expr_element(i: Input) -> IResult<WithSpan<ExprElement>> {
         rule! {
             #function_name
             ~ "(" ~ DISTINCT? ~ #comma_separated_list0(subexpr(0))? ~ ")"
-            ~ (OVER ~ "(" ~ #window_spec ~ ")")
+            ~ (OVER ~ #window_spec_ident)
         },
         |(name, _, opt_distinct, opt_args, _, window)| ExprElement::FunctionCall {
             distinct: opt_distinct.is_some(),
             name,
             args: opt_args.unwrap_or_default(),
             params: vec![],
-            window: Some(window.2),
+            window: Some(window.1),
         },
     );
 
@@ -990,22 +913,6 @@ pub fn expr_element(i: Input) -> IResult<WithSpan<ExprElement>> {
             ExprElement::Array { exprs }
         },
     );
-    // ARRAY_SORT([...], ASC | DESC, NULLS FIRST | LAST)
-    let array_sort = map(
-        rule! {
-            ( ARRAY_SORT )
-            ~ "("
-            ~ #subexpr(0)
-            ~ ( "," ~ #literal_string )?
-            ~ ( "," ~ #literal_string )?
-            ~ ")"
-        },
-        |(_, _, expr, opt_asc, opt_null_first, _)| ExprElement::ArraySort {
-            expr: Box::new(expr),
-            asc: opt_asc.map(|(_, asc)| asc),
-            nulls_first: opt_null_first.map(|(_, first_last)| first_last),
-        },
-    );
 
     let map_expr = map(
         rule! { "{" ~ #comma_separated_list0(map_element) ~ "}" },
@@ -1080,6 +987,7 @@ pub fn expr_element(i: Input) -> IResult<WithSpan<ExprElement>> {
         },
         |(_, not, _, _)| ExprElement::IsDistinctFrom { not: not.is_some() },
     );
+
     let (rest, (span, elem)) = consumed(alt((
         // Note: each `alt` call supports maximum of 21 parsers
         rule!(
@@ -1103,7 +1011,6 @@ pub fn expr_element(i: Input) -> IResult<WithSpan<ExprElement>> {
         rule!(
             #position : "`POSITION(... IN ...)`"
             | #substring : "`SUBSTRING(... [FROM ...] [FOR ...])`"
-            | #array_sort : "`ARRAY_SORT([...], 'ASC' | 'DESC', 'NULLS FIRST' | 'NULLS LAST')`"
             | #trim : "`TRIM(...)`"
             | #trim_from : "`TRIM([(BOTH | LEADEING | TRAILING) ... FROM ...)`"
             | #is_distinct_from: "`... IS [NOT] DISTINCT FROM ...`"
@@ -1123,26 +1030,6 @@ pub fn expr_element(i: Input) -> IResult<WithSpan<ExprElement>> {
     )))(i)?;
 
     Ok((rest, WithSpan { span, elem }))
-}
-
-pub fn window_frame_bound(i: Input) -> IResult<WindowFrameBound> {
-    alt((
-        value(WindowFrameBound::CurrentRow, rule! { CURRENT ~ ROW }),
-        map(rule! { #subexpr(0) ~ PRECEDING }, |(expr, _)| {
-            WindowFrameBound::Preceding(Some(Box::new(expr)))
-        }),
-        value(
-            WindowFrameBound::Preceding(None),
-            rule! { UNBOUNDED ~ PRECEDING },
-        ),
-        map(rule! { #subexpr(0) ~ FOLLOWING }, |(expr, _)| {
-            WindowFrameBound::Following(Some(Box::new(expr)))
-        }),
-        value(
-            WindowFrameBound::Following(None),
-            rule! { UNBOUNDED ~ FOLLOWING },
-        ),
-    ))(i)
 }
 
 pub fn unary_op(i: Input) -> IResult<UnaryOperator> {
@@ -1185,6 +1072,7 @@ pub fn binary_op(i: Input) -> IResult<BinaryOperator> {
             value(BinaryOperator::NotRegexp, rule! { NOT ~ REGEXP }),
             value(BinaryOperator::RLike, rule! { RLIKE }),
             value(BinaryOperator::NotRLike, rule! { NOT ~ RLIKE }),
+            value(BinaryOperator::SoundsLike, rule! { SOUNDS ~ LIKE }),
             value(BinaryOperator::BitwiseOr, rule! { BitWiseOr }),
             value(BinaryOperator::BitwiseAnd, rule! { BitWiseAnd }),
             value(BinaryOperator::BitwiseXor, rule! { BitWiseXor }),

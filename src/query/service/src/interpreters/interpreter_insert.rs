@@ -49,7 +49,7 @@ use common_expression::Value;
 use common_formats::FastFieldDecoderValues;
 use common_io::cursor_ext::ReadBytesExt;
 use common_io::cursor_ext::ReadCheckPointExt;
-use common_meta_app::principal::FileFormatOptions;
+use common_meta_app::principal::FileFormatOptionsAst;
 use common_meta_app::principal::StageFileFormatType;
 use common_meta_app::principal::StageInfo;
 use common_pipeline_core::Pipeline;
@@ -63,9 +63,11 @@ use common_sql::executor::table_read_plan::ToReadDataSourcePlan;
 use common_sql::executor::DistributedInsertSelect;
 use common_sql::executor::PhysicalPlan;
 use common_sql::executor::PhysicalPlanBuilder;
+use common_sql::plans::FunctionCall;
 use common_sql::plans::Insert;
 use common_sql::plans::InsertInputSource;
 use common_sql::plans::Plan;
+use common_sql::plans::ScalarExpr;
 use common_sql::BindContext;
 use common_sql::Metadata;
 use common_sql::MetadataRef;
@@ -125,6 +127,7 @@ impl InsertInterpreter {
         Ok(cast_needed)
     }
 
+    #[async_backtrace::framed]
     async fn try_purge_files(
         ctx: Arc<QueryContext>,
         stage_info: &StageInfo,
@@ -149,6 +152,7 @@ impl InsertInterpreter {
         }
     }
 
+    #[async_backtrace::framed]
     async fn prepared_values(&self, values_str: &str) -> Result<(DataSchemaRef, Vec<Scalar>)> {
         let settings = self.ctx.get_settings();
         let sql_dialect = settings.get_sql_dialect()?;
@@ -177,7 +181,7 @@ impl InsertInterpreter {
             }
         }
         let name_resolution_ctx = NameResolutionContext::try_from(settings.as_ref())?;
-        let bind_context = BindContext::new();
+        let mut bind_context = BindContext::new();
         let metadata = Arc::new(RwLock::new(Metadata::default()));
         let const_schema = Arc::new(DataSchema::new(const_fields));
         let const_values = exprs_to_scalar(
@@ -185,13 +189,14 @@ impl InsertInterpreter {
             &const_schema,
             self.ctx.clone(),
             &name_resolution_ctx,
-            &bind_context,
+            &mut bind_context,
             metadata,
         )
         .await?;
         Ok((Arc::new(DataSchema::new(attachment_fields)), const_values))
     }
 
+    #[async_backtrace::framed]
     async fn build_insert_from_stage_pipeline(
         &self,
         table: Arc<dyn Table>,
@@ -214,7 +219,10 @@ impl InsertInterpreter {
         let (mut stage_info, path) = parse_stage_location(&self.ctx, &attachment.location).await?;
 
         if let Some(ref options) = attachment.file_format_options {
-            stage_info.file_format_options = FileFormatOptions::from_map(options)?;
+            stage_info.file_format_params = FileFormatOptionsAst {
+                options: options.clone(),
+            }
+            .try_into()?;
         }
         if let Some(ref options) = attachment.copy_options {
             stage_info.copy_options.apply(options, true)?;
@@ -232,7 +240,7 @@ impl InsertInterpreter {
             files_to_copy: None,
         };
 
-        let all_source_files = StageTable::list_files(&stage_table_info).await?;
+        let all_source_files = StageTable::list_files(&stage_table_info, None).await?;
 
         info!(
             "insert: read all stage attachment files finished: {}, elapsed:{}",
@@ -346,6 +354,7 @@ impl Interpreter for InsertInterpreter {
         "InsertIntoInterpreter"
     }
 
+    #[async_backtrace::framed]
     async fn execute2(&self) -> Result<PipelineBuildResult> {
         let plan = &self.plan;
         let table = self
@@ -391,7 +400,7 @@ impl Interpreter for InsertInterpreter {
                                     transform_input_port,
                                     transform_output_port,
                                     dest_schema.clone(),
-                                    func_ctx,
+                                    func_ctx.clone(),
                                 )
                             },
                         )?;
@@ -399,13 +408,13 @@ impl Interpreter for InsertInterpreter {
                     _ => {}
                 }
             }
-            InsertInputSource::StreamingWithFileFormat(format_options, _, input_context) => {
+            InsertInputSource::StreamingWithFileFormat(params, _, input_context) => {
                 let input_context = input_context.as_ref().expect("must success").clone();
                 input_context
                     .format
                     .exec_stream(input_context.clone(), &mut build_res.main_pipeline)?;
 
-                if format_options.format.has_inner_schema() {
+                if params.get_type().has_inner_schema() {
                     let dest_schema = plan.schema();
                     let func_ctx = self.ctx.get_function_context()?;
 
@@ -415,7 +424,7 @@ impl Interpreter for InsertInterpreter {
                                 transform_input_port,
                                 transform_output_port,
                                 dest_schema.clone(),
-                                func_ctx,
+                                func_ctx.clone(),
                             )
                         },
                     )?;
@@ -552,6 +561,7 @@ impl AsyncSource for ValueSource {
     const SKIP_EMPTY_DATA_BLOCK: bool = true;
 
     #[async_trait::unboxed_simple]
+    #[async_backtrace::framed]
     async fn generate(&mut self) -> Result<Option<DataBlock>> {
         if self.is_finished {
             return Ok(None);
@@ -601,6 +611,7 @@ impl ValueSource {
         }
     }
 
+    #[async_backtrace::framed]
     pub async fn read<R: AsRef<[u8]>>(
         &self,
         estimated_rows: usize,
@@ -613,6 +624,8 @@ impl ValueSource {
             .iter()
             .map(|f| ColumnBuilder::with_capacity(f.data_type(), estimated_rows))
             .collect::<Vec<_>>();
+
+        let mut bind_context = self.bind_context.clone();
 
         let format = self.ctx.get_format_settings()?;
         let field_decoder = FastFieldDecoderValues::create_for_insert(format);
@@ -632,7 +645,7 @@ impl ValueSource {
                 reader,
                 &mut columns,
                 positions,
-                &self.bind_context,
+                &mut bind_context,
                 self.metadata.clone(),
             )
             .await?;
@@ -646,13 +659,14 @@ impl ValueSource {
     }
 
     /// Parse single row value, like ('111', 222, 1 + 1)
+    #[async_backtrace::framed]
     async fn parse_next_row<R: AsRef<[u8]>>(
         &self,
         field_decoder: &FastFieldDecoderValues,
         reader: &mut Cursor<R>,
         columns: &mut [ColumnBuilder],
         positions: &mut VecDeque<usize>,
-        bind_context: &BindContext,
+        bind_context: &mut BindContext,
         metadata: MetadataRef,
     ) -> Result<()> {
         let _ = reader.ignore_white_spaces();
@@ -836,7 +850,7 @@ async fn exprs_to_scalar(
     schema: &DataSchemaRef,
     ctx: Arc<dyn TableContext>,
     name_resolution_ctx: &NameResolutionContext,
-    bind_context: &BindContext,
+    bind_context: &mut BindContext,
     metadata: MetadataRef,
 ) -> Result<Vec<Scalar>> {
     let schema_fields_len = schema.fields().len();
@@ -866,9 +880,39 @@ async fn exprs_to_scalar(
             }
         }
 
-        let (mut scalar, _) = scalar_binder.bind(expr).await?;
+        let (mut scalar, data_type) = scalar_binder.bind(expr).await?;
         let field_data_type = schema.field(i).data_type();
-        scalar = wrap_cast(&scalar, field_data_type);
+        scalar = if field_data_type.remove_nullable() == DataType::Variant {
+            match data_type.remove_nullable() {
+                DataType::Boolean
+                | DataType::Number(_)
+                | DataType::Decimal(_)
+                | DataType::Timestamp
+                | DataType::Date
+                | DataType::Variant => wrap_cast(&scalar, field_data_type),
+                DataType::String => {
+                    // parse string to JSON value
+                    ScalarExpr::FunctionCall(FunctionCall {
+                        span: None,
+                        func_name: "parse_json".to_string(),
+                        params: vec![],
+                        arguments: vec![scalar],
+                    })
+                }
+                _ => {
+                    if data_type == DataType::Null && field_data_type.is_nullable() {
+                        scalar
+                    } else {
+                        return Err(ErrorCode::BadBytes(format!(
+                            "unable to cast type `{}` to type `{}`",
+                            data_type, field_data_type
+                        )));
+                    }
+                }
+            }
+        } else {
+            wrap_cast(&scalar, field_data_type)
+        };
         let expr = scalar
             .as_expr_with_col_index()?
             .project_column_ref(|index| schema.index_of(&index.to_string()).unwrap());

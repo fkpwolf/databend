@@ -20,7 +20,7 @@ use common_exception::ErrorCode;
 use common_exception::Result;
 use common_expression::types::DataType;
 use common_expression::ConstantFolder;
-use common_functions::scalars::BUILTIN_FUNCTIONS;
+use common_functions::BUILTIN_FUNCTIONS;
 
 use super::wrap_cast;
 use super::BindContext;
@@ -32,9 +32,10 @@ use crate::plans::UnSettingPlan;
 use crate::plans::VarValue;
 
 impl Binder {
+    #[async_backtrace::framed]
     pub(in crate::planner::binder) async fn bind_set_variable(
         &mut self,
-        bind_context: &BindContext,
+        bind_context: &mut BindContext,
         is_global: bool,
         variable: &Identifier,
         value: &Expr,
@@ -53,7 +54,7 @@ impl Binder {
         let expr = scalar.as_expr_with_col_index()?;
 
         let (new_expr, _) =
-            ConstantFolder::fold(&expr, self.ctx.get_function_context()?, &BUILTIN_FUNCTIONS);
+            ConstantFolder::fold(&expr, &self.ctx.get_function_context()?, &BUILTIN_FUNCTIONS);
         match new_expr {
             common_expression::Expr::Constant { scalar, .. } => {
                 let value = String::from_utf8(scalar.into_string().unwrap())?;
@@ -68,6 +69,7 @@ impl Binder {
         }
     }
 
+    #[async_backtrace::framed]
     pub(in crate::planner::binder) async fn bind_unset_variable(
         &mut self,
         _bind_context: &BindContext,

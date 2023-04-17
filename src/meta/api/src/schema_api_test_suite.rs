@@ -67,8 +67,6 @@ use common_meta_app::share::CreateShareReq;
 use common_meta_app::share::GrantShareObjectReq;
 use common_meta_app::share::ShareGrantObjectName;
 use common_meta_app::share::ShareGrantObjectPrivilege;
-use common_meta_app::share::ShareId;
-use common_meta_app::share::ShareMeta;
 use common_meta_app::share::ShareNameIdent;
 use common_meta_kvapi::kvapi;
 use common_meta_kvapi::kvapi::Key;
@@ -646,63 +644,21 @@ impl SchemaApiTestSuite {
         mt: &MT,
     ) -> anyhow::Result<()> {
         let tenant1 = "tenant1";
-        let tenant2 = "tenant2";
         let db1 = "db1";
-        let db2 = "db2";
         let share = "share";
         let share_name = ShareNameIdent {
-            tenant: tenant2.to_string(),
+            tenant: tenant1.to_string(),
             share_name: share.to_string(),
         };
         let db_name1 = DatabaseNameIdent {
             tenant: tenant1.to_string(),
             db_name: db1.to_string(),
         };
-        let db_name2 = DatabaseNameIdent {
-            tenant: tenant2.to_string(),
-            db_name: db2.to_string(),
-        };
+
         let db_id;
-        let share_id;
-
-        info!("--- tenant1 create db1 from an unknown share");
-        {
-            let req = CreateDatabaseReq {
-                if_not_exists: false,
-                name_ident: db_name1.clone(),
-                meta: DatabaseMeta {
-                    from_share: Some(share_name.clone()),
-                    ..Default::default()
-                },
-            };
-
-            let res = mt.create_database(req).await;
-            info!("create database res: {:?}", res);
-            let err = res.unwrap_err();
-            assert_eq!(
-                ErrorCode::UnknownShare("").code(),
-                ErrorCode::from(err).code()
-            );
-        };
 
         info!("--- create a share and tenant1 create db1 from a share");
         {
-            // first create the share but not grant the tenant
-            let create_on = Utc::now();
-            let share_on = Utc::now();
-            let req = CreateShareReq {
-                if_not_exists: false,
-                share_name: share_name.clone(),
-                comment: None,
-                create_on,
-            };
-
-            let res = mt.create_share(req).await;
-            info!("create share res: {:?}", res);
-            assert!(res.is_ok());
-            // save the share id
-            share_id = res.unwrap().share_id;
-
             let req = CreateDatabaseReq {
                 if_not_exists: false,
                 name_ident: db_name1.clone(),
@@ -714,76 +670,7 @@ impl SchemaApiTestSuite {
 
             let res = mt.create_database(req).await;
             info!("create database res: {:?}", res);
-            let err = res.unwrap_err();
-            assert_eq!(
-                ErrorCode::UnknownShareAccounts("").code(),
-                ErrorCode::from(err).code()
-            );
 
-            // grant the tenant to access the share
-            let req = AddShareAccountsReq {
-                share_name: share_name.clone(),
-                share_on,
-                if_exists: false,
-                accounts: vec![tenant1.to_string()],
-            };
-
-            let res = mt.add_share_tenants(req).await;
-            assert!(res.is_ok());
-
-            // try again create database from the share
-            let req = CreateDatabaseReq {
-                if_not_exists: false,
-                name_ident: db_name1.clone(),
-                meta: DatabaseMeta {
-                    from_share: Some(share_name.clone()),
-                    ..Default::default()
-                },
-            };
-
-            let res = mt.create_database(req).await;
-            info!("create database res: {:?}", res);
-            let err = res.unwrap_err();
-            assert_eq!(
-                ErrorCode::ShareHasNoGrantedDatabase("").code(),
-                ErrorCode::from(err).code()
-            );
-
-            // create database of tenant2
-            let req = CreateDatabaseReq {
-                if_not_exists: false,
-                name_ident: db_name2.clone(),
-                meta: DatabaseMeta {
-                    ..Default::default()
-                },
-            };
-
-            let res = mt.create_database(req).await;
-            info!("create database res: {:?}", res);
-            assert!(res.is_ok());
-
-            // and grant access to database from the share
-            let req = GrantShareObjectReq {
-                share_name: share_name.clone(),
-                object: ShareGrantObjectName::Database(db2.to_string()),
-                grant_on: create_on,
-                privilege: ShareGrantObjectPrivilege::Usage,
-            };
-
-            let _ = mt.grant_share_object(req).await?;
-
-            // after grant access to database, create database from share MUST succeeds
-            let req = CreateDatabaseReq {
-                if_not_exists: false,
-                name_ident: db_name1.clone(),
-                meta: DatabaseMeta {
-                    from_share: Some(share_name.clone()),
-                    ..Default::default()
-                },
-            };
-
-            let res = mt.create_database(req).await;
-            info!("create database res: {:?}", res);
             assert!(res.is_ok());
             // save the db id
             db_id = res.unwrap().db_id;
@@ -791,21 +678,11 @@ impl SchemaApiTestSuite {
 
         // drop database created from share
         {
-            // check that share db id contains the db id
-            let share_id_key = ShareId { share_id };
-            let share_meta: ShareMeta = get_kv_data(mt.as_kv_api(), &share_id_key).await?;
-            assert!(share_meta.has_share_from_db_id(db_id));
-
             mt.drop_database(DropDatabaseReq {
                 if_exists: false,
                 name_ident: db_name1.clone(),
             })
             .await?;
-
-            // check that share db id has removed the db id
-            let share_id_key = ShareId { share_id };
-            let share_meta: ShareMeta = get_kv_data(mt.as_kv_api(), &share_id_key).await?;
-            assert!(!share_meta.has_share_from_db_id(db_id));
 
             // check that DatabaseMeta has been removed
             let res = is_all_db_data_removed(mt.as_kv_api(), db_id).await?;
@@ -1565,10 +1442,7 @@ impl SchemaApiTestSuite {
             let err_code = ErrorCode::from(status);
 
             assert_eq!(
-                format!(
-                    "Code: 2302, displayText = Table '{}' already exists.",
-                    tbl_name
-                ),
+                format!("Code: 2302, Text = Table '{}' already exists.", tbl_name),
                 err_code.to_string()
             );
 
@@ -1641,7 +1515,7 @@ impl SchemaApiTestSuite {
                     let err_code = ErrorCode::from(status);
 
                     assert_eq!(
-                        format!("Code: 1025, displayText = Unknown table '{:}'.", tbl_name),
+                        format!("Code: 1025, Text = Unknown table '{:}'.", tbl_name),
                         err_code.to_string(),
                         "get dropped table {}",
                         tbl_name
@@ -3107,7 +2981,7 @@ impl SchemaApiTestSuite {
 
             let new_tb_info = mt.get_table((tenant, db_name, new_tbl_name).into()).await?;
 
-            // then drop drop table2
+            // then drop table2
             let drop_plan = DropTableByIdReq {
                 if_exists: false,
                 tb_id: new_tb_info.ident.table_id,
@@ -3512,7 +3386,7 @@ impl SchemaApiTestSuite {
         mt: &MT,
     ) -> anyhow::Result<()> {
         let tenant1 = "tenant1";
-        let tenant2 = "tenant2";
+        let tenant2 = "tenant1";
         let db1 = "db1";
         let db2 = "db2";
         let share = "share";
@@ -4054,7 +3928,7 @@ impl SchemaApiTestSuite {
             assert_eq!(ErrorCode::UnknownDatabase("").code(), err.code());
             assert_eq!("Unknown database 'nonexistent'", err.message());
             assert_eq!(
-                "Code: 1003, displayText = Unknown database 'nonexistent'.",
+                "Code: 1003, Text = Unknown database 'nonexistent'.",
                 err.to_string()
             );
         }

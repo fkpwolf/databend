@@ -32,6 +32,7 @@ use crate::sql::ColumnBinding;
 /// If plan is distributed plan it will build_distributed_pipeline
 /// else build_local_pipeline.
 #[tracing::instrument(level = "debug", skip_all)]
+#[async_backtrace::framed]
 pub async fn build_query_pipeline(
     ctx: &Arc<QueryContext>,
     result_columns: &[ColumnBinding],
@@ -62,6 +63,7 @@ pub async fn build_query_pipeline(
 }
 
 /// Build local pipeline.
+#[async_backtrace::framed]
 pub async fn build_local_pipeline(
     ctx: &Arc<QueryContext>,
     plan: &PhysicalPlan,
@@ -77,6 +79,7 @@ pub async fn build_local_pipeline(
 }
 
 /// Build distributed pipeline via fragment and actions.
+#[async_backtrace::framed]
 pub async fn build_distributed_pipeline(
     ctx: &Arc<QueryContext>,
     plan: &PhysicalPlan,

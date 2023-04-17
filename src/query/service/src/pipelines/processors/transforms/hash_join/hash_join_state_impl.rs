@@ -24,6 +24,7 @@ use common_expression::HashMethod;
 use common_hashtable::HashtableLike;
 
 use super::ProbeState;
+use crate::pipelines::processors::transforms::hash_join::desc::JoinState;
 use crate::pipelines::processors::transforms::hash_join::desc::MarkerKind;
 use crate::pipelines::processors::transforms::hash_join::row::RowPtr;
 use crate::pipelines::processors::HashJoinState;
@@ -68,6 +69,10 @@ impl HashJoinState for JoinHashTable {
 
     fn interrupt(&self) {
         self.interrupt.store(true, Ordering::Release);
+    }
+
+    fn join_state(&self) -> &JoinState {
+        &self.hash_join_desc.join_state
     }
 
     fn attach(&self) -> Result<()> {
@@ -221,21 +226,36 @@ impl HashJoinState for JoinHashTable {
         Ok(())
     }
 
+    #[async_backtrace::framed]
     async fn wait_finish(&self) -> Result<()> {
-        if !self.is_finished()? {
-            self.finished_notify.notified().await;
+        let notified = {
+            let finished_guard = self.is_finished.lock().unwrap();
+
+            match *finished_guard {
+                true => None,
+                false => Some(self.finished_notify.notified()),
+            }
+        };
+
+        if let Some(notified) = notified {
+            notified.await;
         }
 
         Ok(())
     }
 
     fn mark_join_blocks(&self) -> Result<Vec<DataBlock>> {
+        let data_blocks = self.row_space.datablocks();
+        let num_rows = data_blocks
+            .iter()
+            .fold(0, |acc, chunk| acc + chunk.num_rows());
+
         let row_ptrs = self.row_ptrs.read();
         let has_null = self.hash_join_desc.marker_join_desc.has_null.read();
 
         let markers = row_ptrs.iter().map(|r| r.marker.unwrap()).collect();
         let marker_block = self.create_marker_block(*has_null, markers)?;
-        let build_block = self.row_space.gather(&row_ptrs)?;
+        let build_block = self.row_space.gather(&row_ptrs, &data_blocks, &num_rows)?;
         Ok(vec![self.merge_eq_block(&marker_block, &build_block)?])
     }
 
@@ -311,9 +331,16 @@ impl HashJoinState for JoinHashTable {
     }
 
     fn right_semi_join_blocks(&self, blocks: &[DataBlock]) -> Result<Vec<DataBlock>> {
+        let data_blocks = self.row_space.datablocks();
+        let num_rows = data_blocks
+            .iter()
+            .fold(0, |acc, chunk| acc + chunk.num_rows());
+
         let mut row_state = self.row_state_for_right_join()?;
         let unmatched_build_indexes = self.find_unmatched_build_indexes(&row_state)?;
-        let unmatched_build_block = self.row_space.gather(&unmatched_build_indexes)?;
+        let unmatched_build_block =
+            self.row_space
+                .gather(&unmatched_build_indexes, &data_blocks, &num_rows)?;
         // Fast path for right anti join with non-equi conditions
         if self.hash_join_desc.other_predicate.is_none()
             && self.hash_join_desc.join_type == JoinType::RightAnti
@@ -362,7 +389,9 @@ impl HashJoinState for JoinHashTable {
                 return Ok(vec![filtered_block]);
             } else {
                 let unmatched_build_indexes = self.find_unmatched_build_indexes(&row_state)?;
-                let unmatched_build_block = self.row_space.gather(&unmatched_build_indexes)?;
+                let unmatched_build_block =
+                    self.row_space
+                        .gather(&unmatched_build_indexes, &data_blocks, &num_rows)?;
                 Ok(vec![unmatched_build_block])
             };
         }
@@ -397,7 +426,9 @@ impl HashJoinState for JoinHashTable {
             }
         }
         let unmatched_build_indexes = self.find_unmatched_build_indexes(&row_state)?;
-        let unmatched_build_block = self.row_space.gather(&unmatched_build_indexes)?;
+        let unmatched_build_block =
+            self.row_space
+                .gather(&unmatched_build_indexes, &data_blocks, &num_rows)?;
         Ok(vec![unmatched_build_block])
     }
 
@@ -458,7 +489,7 @@ impl JoinHashTable {
     pub(crate) fn non_equi_conditions_for_left_join(
         &self,
         input_blocks: &[DataBlock],
-        probe_indexes_vec: &[Vec<u32>],
+        probe_indexes_vec: &[Vec<(u32, u32)>],
         row_state: &mut [u32],
     ) -> Result<Vec<DataBlock>> {
         let mut output_blocks = Vec::with_capacity(input_blocks.len());

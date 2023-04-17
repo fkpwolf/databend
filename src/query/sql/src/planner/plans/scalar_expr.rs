@@ -17,33 +17,31 @@ use std::hash::Hasher;
 
 use common_ast::ast::BinaryOperator;
 use common_exception::ErrorCode;
+use common_exception::Range;
 use common_exception::Result;
 use common_exception::Span;
 use common_expression::types::DataType;
-use common_expression::Literal;
+use common_expression::Scalar;
 use educe::Educe;
+use itertools::Itertools;
 
+use super::WindowFuncFrame;
+use super::WindowFuncType;
 use crate::binder::ColumnBinding;
 use crate::binder::InternalColumnBinding;
 use crate::optimizer::ColumnSet;
 use crate::optimizer::SExpr;
 use crate::IndexType;
+use crate::MetadataRef;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ScalarExpr {
     BoundColumnRef(BoundColumnRef),
     BoundInternalColumnRef(BoundInternalColumnRef),
     ConstantExpr(ConstantExpr),
-    AndExpr(AndExpr),
-    OrExpr(OrExpr),
-    NotExpr(NotExpr),
-    ComparisonExpr(ComparisonExpr),
     WindowFunction(WindowFunc),
     AggregateFunction(AggregateFunction),
     FunctionCall(FunctionCall),
-    Unnest(Unnest),
-    // TODO(leiysky): maybe we don't need this variant any more
-    // after making functions static typed?
     CastExpr(CastExpr),
     SubqueryExpr(SubqueryExpr),
 }
@@ -58,26 +56,13 @@ impl ScalarExpr {
             ScalarExpr::BoundColumnRef(scalar) => ColumnSet::from([scalar.column.index]),
             ScalarExpr::BoundInternalColumnRef(scalar) => ColumnSet::from([scalar.column.index]),
             ScalarExpr::ConstantExpr(_) => ColumnSet::new(),
-            ScalarExpr::AndExpr(scalar) => {
-                let left: ColumnSet = scalar.left.used_columns();
-                let right: ColumnSet = scalar.right.used_columns();
-                left.union(&right).cloned().collect()
-            }
-            ScalarExpr::OrExpr(scalar) => {
-                let left: ColumnSet = scalar.left.used_columns();
-                let right: ColumnSet = scalar.right.used_columns();
-                left.union(&right).cloned().collect()
-            }
-            ScalarExpr::NotExpr(scalar) => scalar.argument.used_columns(),
-            ScalarExpr::ComparisonExpr(scalar) => {
-                let left: ColumnSet = scalar.left.used_columns();
-                let right: ColumnSet = scalar.right.used_columns();
-                left.union(&right).cloned().collect()
-            }
             ScalarExpr::WindowFunction(scalar) => {
-                let mut result = ColumnSet::new();
-                for scalar in &scalar.agg_func.args {
+                let mut result = scalar.func.used_columns();
+                for scalar in &scalar.partition_by {
                     result = result.union(&scalar.used_columns()).cloned().collect();
+                }
+                for order in &scalar.order_by {
+                    result = result.union(&order.expr.used_columns()).cloned().collect();
                 }
                 result
             }
@@ -97,39 +82,40 @@ impl ScalarExpr {
             }
             ScalarExpr::CastExpr(scalar) => scalar.argument.used_columns(),
             ScalarExpr::SubqueryExpr(scalar) => scalar.outer_columns.clone(),
-            ScalarExpr::Unnest(scalar) => scalar.argument.used_columns(),
         }
     }
 
-    /// Collect all [`ScalarExpr`]s that need to be eval before executing `UNNEST`.
-    pub fn collect_before_unnest_scalars(&self, scalars: &mut Vec<Box<ScalarExpr>>) {
+    // Get used tables in ScalarExpr
+    pub fn used_tables(&self, metadata: MetadataRef) -> Result<Vec<IndexType>> {
         match self {
-            ScalarExpr::AndExpr(scalar) => {
-                scalar.left.collect_before_unnest_scalars(scalars);
-                scalar.right.collect_before_unnest_scalars(scalars);
-            }
-            ScalarExpr::OrExpr(scalar) => {
-                scalar.left.collect_before_unnest_scalars(scalars);
-                scalar.right.collect_before_unnest_scalars(scalars);
-            }
-            ScalarExpr::NotExpr(scalar) => scalar.argument.collect_before_unnest_scalars(scalars),
-            ScalarExpr::ComparisonExpr(scalar) => {
-                scalar.left.collect_before_unnest_scalars(scalars);
-                scalar.right.collect_before_unnest_scalars(scalars);
-            }
-            ScalarExpr::AggregateFunction(scalar) => {
-                for scalar in &scalar.args {
-                    scalar.collect_before_unnest_scalars(scalars);
+            ScalarExpr::BoundColumnRef(scalar) => {
+                let mut tables = vec![];
+                if let Some(table_index) = scalar.column.table_index {
+                    tables = vec![table_index];
                 }
+                Ok(tables)
+            }
+            ScalarExpr::BoundInternalColumnRef(_) | ScalarExpr::ConstantExpr(_) => Ok(vec![]),
+            ScalarExpr::AggregateFunction(scalar) => {
+                let mut result = vec![];
+                for scalar in &scalar.args {
+                    result.append(&mut scalar.used_tables(metadata.clone())?);
+                }
+                Ok(result)
             }
             ScalarExpr::FunctionCall(scalar) => {
+                let mut result = vec![];
                 for scalar in &scalar.arguments {
-                    scalar.collect_before_unnest_scalars(scalars);
+                    result.append(&mut scalar.used_tables(metadata.clone())?);
                 }
+                Ok(result)
             }
-            ScalarExpr::CastExpr(scalar) => scalar.argument.collect_before_unnest_scalars(scalars),
-            ScalarExpr::Unnest(scalar) => scalars.push(scalar.argument.clone()),
-            _ => {}
+            ScalarExpr::CastExpr(scalar) => scalar.argument.used_tables(metadata),
+            ScalarExpr::WindowFunction(_) | ScalarExpr::SubqueryExpr(_) => {
+                Err(ErrorCode::Unimplemented(
+                    "SubqueryExpr/WindowFunction doesn't support used_tables method".to_string(),
+                ))
+            }
         }
     }
 
@@ -137,8 +123,17 @@ impl ScalarExpr {
         match self {
             ScalarExpr::BoundColumnRef(expr) => expr.span,
             ScalarExpr::ConstantExpr(expr) => expr.span,
-            ScalarExpr::FunctionCall(expr) => expr.span,
-            ScalarExpr::CastExpr(expr) => expr.span,
+            ScalarExpr::FunctionCall(expr) => expr.span.or_else(|| {
+                let (start, end) = expr
+                    .arguments
+                    .iter()
+                    .filter_map(|x| x.span())
+                    .flat_map(|span| [span.start, span.end])
+                    .minmax()
+                    .into_option()?;
+                Some(Range { start, end })
+            }),
+            ScalarExpr::CastExpr(expr) => expr.span.or(expr.argument.span()),
             ScalarExpr::SubqueryExpr(expr) => expr.span,
             _ => None,
         }
@@ -189,76 +184,6 @@ impl TryFrom<ScalarExpr> for ConstantExpr {
     }
 }
 
-impl From<AndExpr> for ScalarExpr {
-    fn from(v: AndExpr) -> Self {
-        Self::AndExpr(v)
-    }
-}
-
-impl TryFrom<ScalarExpr> for AndExpr {
-    type Error = ErrorCode;
-    fn try_from(value: ScalarExpr) -> Result<Self> {
-        if let ScalarExpr::AndExpr(value) = value {
-            Ok(value)
-        } else {
-            Err(ErrorCode::Internal("Cannot downcast Scalar to AndExpr"))
-        }
-    }
-}
-
-impl From<OrExpr> for ScalarExpr {
-    fn from(v: OrExpr) -> Self {
-        Self::OrExpr(v)
-    }
-}
-
-impl TryFrom<ScalarExpr> for OrExpr {
-    type Error = ErrorCode;
-    fn try_from(value: ScalarExpr) -> Result<Self> {
-        if let ScalarExpr::OrExpr(value) = value {
-            Ok(value)
-        } else {
-            Err(ErrorCode::Internal("Cannot downcast Scalar to OrExpr"))
-        }
-    }
-}
-
-impl From<NotExpr> for ScalarExpr {
-    fn from(v: NotExpr) -> Self {
-        Self::NotExpr(v)
-    }
-}
-
-impl TryFrom<ScalarExpr> for NotExpr {
-    type Error = ErrorCode;
-    fn try_from(value: ScalarExpr) -> Result<Self> {
-        if let ScalarExpr::NotExpr(value) = value {
-            Ok(value)
-        } else {
-            Err(ErrorCode::Internal("Cannot downcast Scalar to NotExpr"))
-        }
-    }
-}
-
-impl From<ComparisonExpr> for ScalarExpr {
-    fn from(v: ComparisonExpr) -> Self {
-        Self::ComparisonExpr(v)
-    }
-}
-
-impl TryFrom<ScalarExpr> for ComparisonExpr {
-    type Error = ErrorCode;
-    fn try_from(value: ScalarExpr) -> Result<Self> {
-        if let ScalarExpr::ComparisonExpr(value) = value {
-            Ok(value)
-        } else {
-            Err(ErrorCode::Internal(
-                "Cannot downcast Scalar to ComparisonExpr",
-            ))
-        }
-    }
-}
-
 impl From<AggregateFunction> for ScalarExpr {
     fn from(v: AggregateFunction) -> Self {
         Self::AggregateFunction(v)
@@ -292,23 +217,6 @@ impl TryFrom<ScalarExpr> for WindowFunc {
             Ok(value)
         } else {
             Err(ErrorCode::Internal("Cannot downcast Scalar to WindowFunc"))
-        }
-    }
-}
-
-impl From<Unnest> for ScalarExpr {
-    fn from(v: Unnest) -> Self {
-        Self::Unnest(v)
-    }
-}
-
-impl TryFrom<ScalarExpr> for Unnest {
-    type Error = ErrorCode;
-    fn try_from(value: ScalarExpr) -> Result<Self> {
-        if let ScalarExpr::Unnest(value) = value {
-            Ok(value)
-        } else {
-            Err(ErrorCode::Internal("Cannot downcast Scalar to Unnest"))
         }
     }
 }
@@ -386,28 +294,10 @@ pub struct BoundInternalColumnRef {
 pub struct ConstantExpr {
     #[educe(Hash(ignore), PartialEq(ignore), Eq(ignore))]
     pub span: Span,
-    pub value: Literal,
-    pub data_type: Box<DataType>,
+    pub value: Scalar,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct AndExpr {
-    pub left: Box<ScalarExpr>,
-    pub right: Box<ScalarExpr>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct OrExpr {
-    pub left: Box<ScalarExpr>,
-    pub right: Box<ScalarExpr>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct NotExpr {
-    pub argument: Box<ScalarExpr>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ComparisonOp {
     Equal,
     NotEqual,
@@ -422,17 +312,15 @@ pub enum ComparisonOp {
 }
 
 impl ComparisonOp {
-    pub fn try_from_binary_op(op: &BinaryOperator) -> Result<Self> {
-        match op {
-            BinaryOperator::Gt => Ok(Self::GT),
-            BinaryOperator::Lt => Ok(Self::LT),
-            BinaryOperator::Gte => Ok(Self::GTE),
-            BinaryOperator::Lte => Ok(Self::LTE),
-            BinaryOperator::Eq => Ok(Self::Equal),
-            BinaryOperator::NotEq => Ok(Self::NotEqual),
-            _ => Err(ErrorCode::SemanticError(format!(
-                "Unsupported comparison operator {op}"
-            ))),
+    pub fn try_from_func_name(name: &str) -> Option<Self> {
+        match name {
+            "eq" => Some(Self::Equal),
+            "noteq" => Some(Self::NotEqual),
+            "gt" => Some(Self::GT),
+            "lt" => Some(Self::LT),
+            "gte" => Some(Self::GTE),
+            "lte" => Some(Self::LTE),
+            _ => None,
         }
     }
 
@@ -451,23 +339,26 @@ impl ComparisonOp {
 impl<'a> TryFrom<&'a BinaryOperator> for ComparisonOp {
     type Error = ErrorCode;
 
-    fn try_from(value: &'a BinaryOperator) -> Result<Self> {
-        Self::try_from_binary_op(value)
+    fn try_from(op: &'a BinaryOperator) -> Result<Self> {
+        match op {
+            BinaryOperator::Gt => Ok(Self::GT),
+            BinaryOperator::Lt => Ok(Self::LT),
+            BinaryOperator::Gte => Ok(Self::GTE),
+            BinaryOperator::Lte => Ok(Self::LTE),
+            BinaryOperator::Eq => Ok(Self::Equal),
+            BinaryOperator::NotEq => Ok(Self::NotEqual),
+            _ => Err(ErrorCode::SemanticError(format!(
+                "Unsupported comparison operator {op}"
+            ))),
+        }
     }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ComparisonExpr {
-    pub op: ComparisonOp,
-    pub left: Box<ScalarExpr>,
-    pub right: Box<ScalarExpr>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     pub func_name: String,
     pub distinct: bool,
-    pub params: Vec<Literal>,
+    pub params: Vec<Scalar>,
     pub args: Vec<ScalarExpr>,
     pub return_type: Box<DataType>,
 
@@ -476,38 +367,20 @@ pub struct AggregateFunction {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunc {
-    pub agg_func: AggregateFunction,
+    pub display_name: String,
     pub partition_by: Vec<ScalarExpr>,
+    pub func: WindowFuncType,
+    pub order_by: Vec<WindowOrderBy>,
     pub frame: WindowFuncFrame,
 }
 
-impl WindowFunc {
-    pub fn display_name(&self) -> String {
-        format!("{}_with_window", self.agg_func.func_name)
-    }
-}
-
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct WindowFuncFrame {
-    pub units: WindowFuncFrameUnits,
-    pub start: WindowFuncFrameBound,
-    pub end: WindowFuncFrameBound,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum WindowFuncFrameBound {
-    /// `CURRENT ROW`
-    CurrentRow,
-    /// `<N> PRECEDING` or `UNBOUNDED PRECEDING`
-    Preceding(Option<Box<ScalarExpr>>),
-    /// `<N> FOLLOWING` or `UNBOUNDED FOLLOWING`.
-    Following(Option<Box<ScalarExpr>>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum WindowFuncFrameUnits {
-    Rows,
-    Range,
+pub struct WindowOrderBy {
+    pub expr: ScalarExpr,
+    // Optional `ASC` or `DESC`
+    pub asc: Option<bool>,
+    // Optional `NULLS FIRST` or `NULLS LAST`
+    pub nulls_first: Option<bool>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -518,12 +391,6 @@ pub struct FunctionCall {
     pub func_name: String,
     pub params: Vec<usize>,
     pub arguments: Vec<ScalarExpr>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Unnest {
-    pub argument: Box<ScalarExpr>,
-    pub return_type: Box<DataType>,
 }
 
 #[derive(Clone, Debug, Educe)]

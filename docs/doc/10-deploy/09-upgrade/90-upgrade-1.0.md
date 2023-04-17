@@ -2,7 +2,7 @@
 title: Upgrade Databend to 1.0
 sidebar_label: Upgrade Databend to 1.0
 description:
-    Uprgade Databend to 1.0 from 0.8 or later
+    Upgrade Databend to 1.0 from 0.8 or later
 ---
 
 This topic explains how to upgrade Databend to version 1.0 from a version 0.8 or later.
@@ -13,7 +13,7 @@ Before upgrading, make sure you have completed the following tasks:
 
 - Read and understand the [General Principles](50-upgrade.md#general-principles) about upgrading Databend.
 
-- Back up your Meta data. For how to back up and restore Meta data, see [Back Up and Restore Databend Meta Service Cluster](../08-backup-restore/10-backup-and-restore-schema.md).
+- Back up your Meta data. For how to back up and restore Meta data, see [Backup and Restore Schema Data](10-backup-and-restore-schema.md).
 
 - Go to the [Download](https://databend.rs/download) page and download the right installation package for your platform.
 

@@ -52,7 +52,7 @@ use common_expression::Domain;
 use common_expression::EvalContext;
 use common_expression::Function;
 use common_expression::FunctionDomain;
-use common_expression::FunctionProperty;
+use common_expression::FunctionEval;
 use common_expression::FunctionRegistry;
 use common_expression::FunctionSignature;
 use common_expression::Scalar;
@@ -70,13 +70,21 @@ use siphasher::sip128::SipHasher24;
 use crate::aggregates::eval_aggr;
 use crate::AggregateFunctionFactory;
 
-const ARRAY_AGGREGATE_FUNCTIONS: &[(&str, &str); 6] = &[
+const ARRAY_AGGREGATE_FUNCTIONS: &[(&str, &str); 14] = &[
     ("array_avg", "avg"),
     ("array_count", "count"),
     ("array_max", "max"),
     ("array_min", "min"),
     ("array_sum", "sum"),
     ("array_any", "any"),
+    ("array_stddev_samp", "stddev_samp"),
+    ("array_stddev_pop", "stddev_pop"),
+    ("array_stddev", "stddev"),
+    ("array_std", "std"),
+    ("array_median", "median"),
+    ("array_approx_count_distinct", "approx_count_distinct"),
+    ("array_kurtosis", "kurtosis"),
+    ("array_skewness", "skewness"),
 ];
 
 const ARRAY_SORT_FUNCTIONS: &[(&str, (bool, bool)); 4] = &[
@@ -96,7 +104,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_0_arg_core::<EmptyArrayType, _, _>(
         "array",
-        FunctionProperty::default(),
         || FunctionDomain::Full,
         |_| Value::Scalar(()),
     );
@@ -110,75 +117,73 @@ pub fn register(registry: &mut FunctionRegistry) {
                 name: "array".to_string(),
                 args_type: vec![DataType::Generic(0); args_type.len()],
                 return_type: DataType::Array(Box::new(DataType::Generic(0))),
-                property: FunctionProperty::default(),
             },
-            calc_domain: Box::new(|args_domain| {
-                FunctionDomain::Domain(args_domain.iter().fold(Domain::Array(None), |acc, x| {
-                    acc.merge(&Domain::Array(Some(Box::new(x.clone()))))
-                }))
-            }),
-            eval: Box::new(|args, ctx| {
-                let len = args.iter().find_map(|arg| match arg {
-                    ValueRef::Column(col) => Some(col.len()),
-                    _ => None,
-                });
+            eval: FunctionEval::Scalar {
+                calc_domain: Box::new(|args_domain| {
+                    FunctionDomain::Domain(
+                        args_domain.iter().fold(Domain::Array(None), |acc, x| {
+                            acc.merge(&Domain::Array(Some(Box::new(x.clone()))))
+                        }),
+                    )
+                }),
+                eval: Box::new(|args, ctx| {
+                    let len = args.iter().find_map(|arg| match arg {
+                        ValueRef::Column(col) => Some(col.len()),
+                        _ => None,
+                    });
 
-                let mut builder: ArrayColumnBuilder<GenericType<0>> =
-                    ArrayColumnBuilder::with_capacity(len.unwrap_or(1), 0, ctx.generics);
+                    let mut builder: ArrayColumnBuilder<GenericType<0>> =
+                        ArrayColumnBuilder::with_capacity(len.unwrap_or(1), 0, ctx.generics);
 
-                for idx in 0..(len.unwrap_or(1)) {
-                    for arg in args {
-                        match arg {
-                            ValueRef::Scalar(scalar) => {
-                                builder.put_item(scalar.clone());
+                    for idx in 0..(len.unwrap_or(1)) {
+                        for arg in args {
+                            match arg {
+                                ValueRef::Scalar(scalar) => {
+                                    builder.put_item(scalar.clone());
+                                }
+                                ValueRef::Column(col) => unsafe {
+                                    builder.put_item(col.index_unchecked(idx));
+                                },
                             }
-                            ValueRef::Column(col) => unsafe {
-                                builder.put_item(col.index_unchecked(idx));
-                            },
                         }
+                        builder.commit_row();
                     }
-                    builder.commit_row();
-                }
 
-                match len {
-                    Some(_) => Value::Column(Column::Array(Box::new(builder.build().upcast()))),
-                    None => Value::Scalar(Scalar::Array(builder.build_scalar())),
-                }
-            }),
+                    match len {
+                        Some(_) => Value::Column(Column::Array(Box::new(builder.build().upcast()))),
+                        None => Value::Scalar(Scalar::Array(builder.build_scalar())),
+                    }
+                }),
+            },
         }))
     });
 
     registry.register_1_arg::<EmptyArrayType, NumberType<u8>, _, _>(
         "length",
-        FunctionProperty::default(),
         |_| FunctionDomain::Domain(SimpleDomain { min: 0, max: 0 }),
         |_, _| 0u8,
     );
 
     registry.register_1_arg::<ArrayType<GenericType<0>>, NumberType<u64>, _, _>(
         "length",
-        FunctionProperty::default(),
         |_| FunctionDomain::Full,
         |arr, _| arr.len() as u64,
     );
 
     registry.register_2_arg_core::<NullableType<EmptyArrayType>, NullableType<UInt64Type>, NullType, _, _>(
         "get",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         |_, _, _| Value::Scalar(()),
     );
 
     registry.register_2_arg_core::<NullableType<ArrayType<NullType>>, NullableType<UInt64Type>, NullType, _, _>(
         "get",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         |_, _, _| Value::Scalar(()),
     );
 
     registry.register_combine_nullable_2_arg::<ArrayType<NullableType<GenericType<0>>>, UInt64Type, GenericType<0>, _, _>(
         "get",
-        FunctionProperty::default(),
         |domain, _| FunctionDomain::Domain(NullableDomain {
             has_null: true,
             value: domain.as_ref().and_then(|domain| domain.value.clone()),
@@ -199,14 +204,12 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_2_arg_core::<NullType, NullType, NullType, _, _>(
         "array_indexof",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         |_, _, _| Value::Scalar(()),
     );
 
     registry.register_passthrough_nullable_2_arg::<ArrayType<GenericType<0>>, GenericType<0>, UInt64Type, _, _>(
         "array_indexof",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         vectorize_2_arg::<ArrayType<GenericType<0>>, GenericType<0>, UInt64Type>(
             |arr, val, _| {
@@ -217,14 +220,12 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_2_arg_core::<NullableType<EmptyArrayType>, NullableType<EmptyArrayType>, EmptyArrayType, _, _>(
         "array_concat",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         |_, _, _| Value::Scalar(()),
     );
 
     registry.register_passthrough_nullable_2_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, _, _>(
         "array_concat",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         vectorize_with_builder_2_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, ArrayType<GenericType<0>>>(
             |lhs, rhs, output, _| {
@@ -238,7 +239,6 @@ pub fn register(registry: &mut FunctionRegistry) {
     registry
         .register_passthrough_nullable_2_arg::<EmptyArrayType, UInt64Type, EmptyArrayType, _, _>(
             "slice",
-            FunctionProperty::default(),
             |_, _| FunctionDomain::Full,
             vectorize_with_builder_2_arg::<EmptyArrayType, UInt64Type, EmptyArrayType>(
                 |_, _, output, _| {
@@ -249,7 +249,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_2_arg::<ArrayType<GenericType<0>>, UInt64Type, ArrayType<GenericType<0>>, _, _>(
         "slice",
-        FunctionProperty::default(),
         |domain, _| FunctionDomain::Domain(domain.clone()),
         vectorize_with_builder_2_arg::<ArrayType<GenericType<0>>, UInt64Type, ArrayType<GenericType<0>>>(
             |arr, start, output, _| {
@@ -271,7 +270,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_3_arg::<EmptyArrayType, UInt64Type, UInt64Type, EmptyArrayType, _, _>(
         "slice",
-        FunctionProperty::default(),
         |_, _, _| FunctionDomain::Full,
         vectorize_with_builder_3_arg::<EmptyArrayType, UInt64Type, UInt64Type, EmptyArrayType>(
             |_, _, _, output, _| {
@@ -282,7 +280,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_3_arg::<ArrayType<GenericType<0>>, UInt64Type, UInt64Type, ArrayType<GenericType<0>>, _, _>(
         "slice",
-        FunctionProperty::default(),
         |domain, _, _| FunctionDomain::Domain(domain.clone()),
         vectorize_with_builder_3_arg::<ArrayType<GenericType<0>>, UInt64Type, UInt64Type, ArrayType<GenericType<0>>>(
             |arr, start, end, output, _| {
@@ -310,7 +307,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_1_arg::<EmptyArrayType, EmptyArrayType, _, _>(
         "array_remove_first",
-        FunctionProperty::default(),
         |_| FunctionDomain::Full,
         vectorize_with_builder_1_arg::<EmptyArrayType, EmptyArrayType>(|_, output, _| {
             *output += 1;
@@ -319,7 +315,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, _, _>(
         "array_remove_first",
-        FunctionProperty::default(),
         |domain| FunctionDomain::Domain(domain.clone()),
         vectorize_with_builder_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>>(
             |arr, output, _| {
@@ -336,7 +331,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_1_arg::<EmptyArrayType, EmptyArrayType, _, _>(
         "array_remove_last",
-        FunctionProperty::default(),
         |_| FunctionDomain::Full,
         vectorize_with_builder_1_arg::<EmptyArrayType, EmptyArrayType>(|_, output, _| {
             *output += 1;
@@ -345,7 +339,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, _, _>(
         "array_remove_last",
-        FunctionProperty::default(),
         |domain| FunctionDomain::Domain(domain.clone()),
         vectorize_with_builder_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>>(
             |arr, output, _| {
@@ -362,7 +355,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_2_arg_core::<GenericType<0>, ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, _, _>(
         "array_prepend",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         vectorize_2_arg::<GenericType<0>, ArrayType<GenericType<0>>, ArrayType<GenericType<0>>>(|val, arr, _| {
             let data_type = arr.data_type();
@@ -375,7 +367,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_2_arg_core::<ArrayType<GenericType<0>>, GenericType<0>, ArrayType<GenericType<0>>, _, _>(
         "array_append",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         vectorize_2_arg::<ArrayType<GenericType<0>>, GenericType<0>, ArrayType<GenericType<0>>>(|arr, val, _| {
             let data_type = arr.data_type();
@@ -436,7 +427,6 @@ pub fn register(registry: &mut FunctionRegistry) {
             NumberDataType::NUM_TYPE => {
                 registry.register_passthrough_nullable_2_arg::<ArrayType<NumberType<NUM_TYPE>>, NumberType<NUM_TYPE>, BooleanType, _, _>(
                     "contains",
-                    FunctionProperty::default(),
                     |lhs, rhs| {
                         let has_true = match lhs {
                             Some(lhs) => !(lhs.min > rhs.max || lhs.max < rhs.min),
@@ -455,7 +445,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_2_arg::<ArrayType<StringType>, StringType, BooleanType, _, _>(
         "contains",
-        FunctionProperty::default(),
         |_, _| {
             FunctionDomain::Full
         },
@@ -500,7 +489,6 @@ pub fn register(registry: &mut FunctionRegistry) {
     registry
         .register_passthrough_nullable_2_arg::<ArrayType<DateType>, DateType, BooleanType, _, _>(
             "contains",
-            FunctionProperty::default(),
             |lhs, rhs| {
                 let has_true = match lhs {
                     Some(lhs) => !(lhs.min > rhs.max || lhs.max < rhs.min),
@@ -516,7 +504,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_2_arg::<ArrayType<TimestampType>, TimestampType, BooleanType, _, _>(
             "contains",
-            FunctionProperty::default(),
             |lhs, rhs| {
                 let has_true = match lhs {
                     Some(lhs) => !(lhs.min > rhs.max || lhs.max < rhs.min),
@@ -532,7 +519,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_2_arg::<ArrayType<BooleanType>, BooleanType, BooleanType, _, _>(
         "contains",
-        FunctionProperty::default(),
         |lhs, rhs| {
             match lhs {
                 Some(lhs) => {
@@ -584,7 +570,6 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_2_arg_core::<ArrayType<GenericType<0>>, GenericType<0>, BooleanType, _, _>(
         "contains",
-        FunctionProperty::default(),
         |_, _| FunctionDomain::Full,
         vectorize_2_arg::<ArrayType<GenericType<0>>, GenericType<0>, BooleanType>(|lhs, rhs, _| {
             lhs.iter().contains(&rhs)
@@ -593,14 +578,12 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_1_arg::<EmptyArrayType, UInt64Type, _, _>(
         "array_unique",
-        FunctionProperty::default(),
         |_| FunctionDomain::Domain(SimpleDomain { min: 0, max: 0 }),
         vectorize_1_arg::<EmptyArrayType, UInt64Type>(|_, _| 0),
     );
 
     registry.register_passthrough_nullable_1_arg::<ArrayType<GenericType<0>>, UInt64Type, _, _>(
         "array_unique",
-        FunctionProperty::default(),
         |_| FunctionDomain::Full,
         vectorize_1_arg::<ArrayType<GenericType<0>>, UInt64Type>(|arr, _| {
             if arr.len() > 0 {
@@ -623,14 +606,12 @@ pub fn register(registry: &mut FunctionRegistry) {
 
     registry.register_passthrough_nullable_1_arg::<EmptyArrayType, EmptyArrayType, _, _>(
         "array_distinct",
-        FunctionProperty::default(),
         |_| FunctionDomain::Full,
         vectorize_1_arg::<EmptyArrayType, EmptyArrayType>(|arr, _| arr),
     );
 
     registry.register_passthrough_nullable_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, _, _>(
         "array_distinct",
-        FunctionProperty::default(),
         |_| FunctionDomain::Full,
         vectorize_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>>(|arr, _| {
             if arr.len() > 0 {
@@ -674,8 +655,11 @@ fn register_array_aggr(registry: &mut FunctionRegistry) {
         let factory = AggregateFunctionFactory::instance();
         let func = factory.get(name, vec![], vec![*array_type.clone()]).ok()?;
         let return_type = func.return_type().ok()?;
-
-        Some(return_type)
+        if args_type[0].is_nullable() {
+            Some(return_type.wrap_nullable())
+        } else {
+            Some(return_type)
+        }
     }
 
     fn eval_array_aggr(
@@ -711,6 +695,10 @@ fn register_array_aggr(registry: &mut FunctionRegistry) {
                 let return_type = eval_aggr_return_type(name, &[column.data_type()]).unwrap();
                 let mut builder = ColumnBuilder::with_capacity(&return_type, column.len());
                 for arr in column.iter() {
+                    if arr == ScalarRef::Null {
+                        builder.push_default();
+                        continue;
+                    }
                     let array_column = arr.as_array().unwrap();
                     let len = array_column.len();
                     match eval_aggr(name, vec![], &[array_column.clone()], len) {
@@ -736,10 +724,11 @@ fn register_array_aggr(registry: &mut FunctionRegistry) {
                     name: fn_name.to_string(),
                     args_type: vec![args_type[0].clone()],
                     return_type,
-                    property: FunctionProperty::default(),
                 },
-                calc_domain: Box::new(move |_| FunctionDomain::MayThrow),
-                eval: Box::new(|args, ctx| eval_array_aggr(name, args, ctx)),
+                eval: FunctionEval::Scalar {
+                    calc_domain: Box::new(move |_| FunctionDomain::MayThrow),
+                    eval: Box::new(|args, ctx| eval_array_aggr(name, args, ctx)),
+                },
             }))
         });
     }
@@ -747,14 +736,12 @@ fn register_array_aggr(registry: &mut FunctionRegistry) {
     for (fn_name, sort_desc) in ARRAY_SORT_FUNCTIONS {
         registry.register_passthrough_nullable_1_arg::<EmptyArrayType, EmptyArrayType, _, _>(
             fn_name,
-            FunctionProperty::default(),
             |_| FunctionDomain::Full,
             vectorize_1_arg::<EmptyArrayType, EmptyArrayType>(|arr, _| arr),
         );
 
         registry.register_passthrough_nullable_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>, _, _>(
             fn_name,
-            FunctionProperty::default(),
             |_| FunctionDomain::Full,
             vectorize_1_arg::<ArrayType<GenericType<0>>, ArrayType<GenericType<0>>>(|arr, _| {
                 let len = arr.len();
@@ -763,6 +750,7 @@ fn register_array_aggr(registry: &mut FunctionRegistry) {
                         offset: 0,
                         asc: sort_desc.0,
                         nulls_first: sort_desc.1,
+                        is_nullable: false,  // This information is not needed here.
                     }];
                     let columns = vec![BlockEntry{
                         data_type: arr.data_type(),

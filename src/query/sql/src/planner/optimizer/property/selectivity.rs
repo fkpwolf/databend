@@ -16,13 +16,13 @@ use std::cmp::Ordering;
 
 use common_expression::types::DataType;
 use common_expression::types::NumberDataType;
-use common_expression::Literal;
+use common_expression::types::NumberScalar;
+use common_expression::Scalar;
 
 use crate::optimizer::ColumnStat;
 use crate::optimizer::Datum;
 use crate::optimizer::Histogram;
 use crate::optimizer::Statistics;
-use crate::plans::ComparisonExpr;
 use crate::plans::ComparisonOp;
 use crate::plans::ConstantExpr;
 use crate::plans::ScalarExpr;
@@ -49,47 +49,58 @@ impl<'a> SelectivityEstimator<'a> {
             ScalarExpr::BoundColumnRef(_) => {
                 // If a column ref is on top of a predicate, e.g.
                 // `SELECT * FROM t WHERE c1`, the selectivity is 1.
-                return 1.0;
+                1.0
             }
 
             ScalarExpr::ConstantExpr(constant) => {
                 if is_true_constant_predicate(constant) {
-                    return 1.0;
+                    1.0
                 } else {
-                    return 0.0;
+                    0.0
                 }
             }
 
-            ScalarExpr::AndExpr(and_expr) => {
-                let left_selectivity = self.compute_selectivity(&and_expr.left);
-                let right_selectivity = self.compute_selectivity(&and_expr.right);
-                return left_selectivity * right_selectivity;
+            ScalarExpr::FunctionCall(func) if func.func_name == "and" => {
+                let left_selectivity = self.compute_selectivity(&func.arguments[0]);
+                let right_selectivity = self.compute_selectivity(&func.arguments[1]);
+                left_selectivity * right_selectivity
             }
 
-            ScalarExpr::OrExpr(or_expr) => {
-                let left_selectivity = self.compute_selectivity(&or_expr.left);
-                let right_selectivity = self.compute_selectivity(&or_expr.right);
-                return left_selectivity + right_selectivity - left_selectivity * right_selectivity;
+            ScalarExpr::FunctionCall(func) if func.func_name == "or" => {
+                let left_selectivity = self.compute_selectivity(&func.arguments[0]);
+                let right_selectivity = self.compute_selectivity(&func.arguments[1]);
+                left_selectivity + right_selectivity - left_selectivity * right_selectivity
             }
 
-            ScalarExpr::NotExpr(not_expr) => {
-                let argument_selectivity = self.compute_selectivity(&not_expr.argument);
-                return 1.0 - argument_selectivity;
+            ScalarExpr::FunctionCall(func) if func.func_name == "not" => {
+                let argument_selectivity = self.compute_selectivity(&func.arguments[0]);
+                1.0 - argument_selectivity
             }
 
-            ScalarExpr::ComparisonExpr(comp_expr) => {
-                return self.compute_selectivity_comparison_expr(comp_expr);
+            ScalarExpr::FunctionCall(func) => {
+                if let Some(op) = ComparisonOp::try_from_func_name(&func.func_name) {
+                    return self.compute_selectivity_comparison_expr(
+                        op,
+                        &func.arguments[0],
+                        &func.arguments[1],
+                    );
+                }
+
+                DEFAULT_SELECTIVITY
             }
 
-            _ => {}
+            _ => DEFAULT_SELECTIVITY,
         }
-
-        DEFAULT_SELECTIVITY
     }
 
-    fn compute_selectivity_comparison_expr(&self, comp_expr: &ComparisonExpr) -> f64 {
+    fn compute_selectivity_comparison_expr(
+        &self,
+        op: ComparisonOp,
+        left: &ScalarExpr,
+        right: &ScalarExpr,
+    ) -> f64 {
         if let (ScalarExpr::BoundColumnRef(column_ref), ScalarExpr::ConstantExpr(constant)) =
-            (comp_expr.left.as_ref(), comp_expr.right.as_ref())
+            (left, right)
         {
             // Check if there is available histogram for the column.
             let column_stat =
@@ -103,13 +114,13 @@ impl<'a> SelectivityEstimator<'a> {
             } else {
                 return DEFAULT_SELECTIVITY;
             };
-            let const_datum = if let Some(datum) = Datum::from_literal(&constant.value) {
+            let const_datum = if let Some(datum) = Datum::from_scalar(&constant.value) {
                 datum
             } else {
                 return DEFAULT_SELECTIVITY;
             };
 
-            match &comp_expr.op {
+            match op {
                 ComparisonOp::Equal => {
                     // For equal predicate, we just use cardinality of a single
                     // value to estimate the selectivity. This assumes that
@@ -194,20 +205,21 @@ impl<'a> SelectivityEstimator<'a> {
     }
 }
 
+// TODO(andylokandy): match on non-null boolean only once we have constant folding in the optimizer.
 fn is_true_constant_predicate(constant: &ConstantExpr) -> bool {
     match &constant.value {
-        Literal::Null => false,
-        Literal::Boolean(v) => *v,
-        Literal::Int64(v) => *v != 0,
-        Literal::UInt64(v) => *v != 0,
-        Literal::Float64(v) => *v != 0.0,
+        Scalar::Null => false,
+        Scalar::Boolean(v) => *v,
+        Scalar::Number(NumberScalar::Int64(v)) => *v != 0,
+        Scalar::Number(NumberScalar::UInt64(v)) => *v != 0,
+        Scalar::Number(NumberScalar::Float64(v)) => *v != 0.0,
         _ => true,
     }
 }
 
 fn evaluate_equal(col_hist: &Histogram, column_stat: &ColumnStat, constant: &ConstantExpr) -> f64 {
-    let constant_datum = Datum::from_literal(&constant.value);
-    match *constant.data_type {
+    let constant_datum = Datum::from_scalar(&constant.value);
+    match constant.value.as_ref().infer_data_type() {
         DataType::Null => 0.0,
         DataType::Number(number) => match number {
             NumberDataType::UInt8

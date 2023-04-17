@@ -17,6 +17,7 @@ use std::io::Write;
 use common_expression::types::number::Int64Type;
 use common_expression::types::number::UInt64Type;
 use common_expression::types::BooleanType;
+use common_expression::types::StringType;
 use common_expression::types::TimestampType;
 use common_expression::Column;
 use common_expression::FromData;
@@ -47,10 +48,15 @@ fn test_agg() {
     test_agg_covar_pop(file, eval_aggr);
     test_agg_retention(file, eval_aggr);
     test_agg_stddev(file, eval_aggr);
+    test_agg_kurtosis(file, eval_aggr);
+    test_agg_skewness(file, eval_aggr);
     test_agg_window_funnel(file, eval_aggr);
     test_agg_approx_count_distinct(file, eval_aggr);
+    test_agg_quantile_disc(file, eval_aggr);
     test_agg_quantile_cont(file, eval_aggr);
     test_agg_median(file, eval_aggr);
+    test_agg_array_agg(file, eval_aggr);
+    test_agg_string_agg(file, eval_aggr);
 }
 
 #[test]
@@ -73,10 +79,15 @@ fn test_agg_group_by() {
     test_agg_covar_pop(file, simulate_two_groups_group_by);
     test_agg_retention(file, simulate_two_groups_group_by);
     test_agg_stddev(file, simulate_two_groups_group_by);
+    test_agg_kurtosis(file, simulate_two_groups_group_by);
+    test_agg_skewness(file, simulate_two_groups_group_by);
+    test_agg_quantile_disc(file, simulate_two_groups_group_by);
     test_agg_quantile_cont(file, simulate_two_groups_group_by);
     test_agg_median(file, simulate_two_groups_group_by);
     test_agg_window_funnel(file, simulate_two_groups_group_by);
     test_agg_approx_count_distinct(file, simulate_two_groups_group_by);
+    test_agg_array_agg(file, simulate_two_groups_group_by);
+    test_agg_string_agg(file, simulate_two_groups_group_by);
 }
 
 fn get_example() -> Vec<(&'static str, Column)> {
@@ -114,6 +125,13 @@ fn get_example() -> Vec<(&'static str, Column)> {
         (
             "event3",
             BooleanType::from_data(vec![false, false, false, false]),
+        ),
+        ("s", StringType::from_data(&["abc", "def", "opq", "xyz"])),
+        (
+            "s_null",
+            StringType::from_data_with_validity(&["a", "", "c", "d"], vec![
+                true, false, true, true,
+            ]),
         ),
     ]
 }
@@ -342,6 +360,41 @@ fn test_agg_stddev(file: &mut impl Write, simulator: impl AggregationSimulator) 
     );
 }
 
+fn test_agg_kurtosis(file: &mut impl Write, simulator: impl AggregationSimulator) {
+    run_agg_ast(file, "kurtosis(a)", get_example().as_slice(), simulator);
+    run_agg_ast(
+        file,
+        "kurtosis(x_null)",
+        get_example().as_slice(),
+        simulator,
+    );
+}
+
+fn test_agg_skewness(file: &mut impl Write, simulator: impl AggregationSimulator) {
+    run_agg_ast(file, "skewness(a)", get_example().as_slice(), simulator);
+    run_agg_ast(
+        file,
+        "skewness(x_null)",
+        get_example().as_slice(),
+        simulator,
+    );
+}
+
+fn test_agg_quantile_disc(file: &mut impl Write, simulator: impl AggregationSimulator) {
+    run_agg_ast(
+        file,
+        "quantile_cont(0.8)(a)",
+        get_example().as_slice(),
+        simulator,
+    );
+    run_agg_ast(
+        file,
+        "quantile_cont(0.8)(x_null)",
+        get_example().as_slice(),
+        simulator,
+    );
+}
+
 fn test_agg_quantile_cont(file: &mut impl Write, simulator: impl AggregationSimulator) {
     run_agg_ast(
         file,
@@ -387,6 +440,55 @@ fn test_agg_approx_count_distinct(file: &mut impl Write, simulator: impl Aggrega
     run_agg_ast(
         file,
         "approx_count_distinct(null)",
+        get_example().as_slice(),
+        simulator,
+    );
+}
+
+fn test_agg_array_agg(file: &mut impl Write, simulator: impl AggregationSimulator) {
+    run_agg_ast(file, "array_agg(1)", get_example().as_slice(), simulator);
+    run_agg_ast(file, "array_agg('a')", get_example().as_slice(), simulator);
+    run_agg_ast(file, "array_agg(NULL)", get_example().as_slice(), simulator);
+    run_agg_ast(file, "array_agg(a)", get_example().as_slice(), simulator);
+    run_agg_ast(file, "array_agg(b)", get_example().as_slice(), simulator);
+    run_agg_ast(
+        file,
+        "array_agg(x_null)",
+        get_example().as_slice(),
+        simulator,
+    );
+    run_agg_ast(
+        file,
+        "array_agg(all_null)",
+        get_example().as_slice(),
+        simulator,
+    );
+    run_agg_ast(file, "array_agg(dt)", get_example().as_slice(), simulator);
+    run_agg_ast(
+        file,
+        "array_agg(event1)",
+        get_example().as_slice(),
+        simulator,
+    );
+}
+
+fn test_agg_string_agg(file: &mut impl Write, simulator: impl AggregationSimulator) {
+    run_agg_ast(file, "string_agg(s)", get_example().as_slice(), simulator);
+    run_agg_ast(
+        file,
+        "string_agg(s_null)",
+        get_example().as_slice(),
+        simulator,
+    );
+    run_agg_ast(
+        file,
+        "string_agg(s, '|')",
+        get_example().as_slice(),
+        simulator,
+    );
+    run_agg_ast(
+        file,
+        "string_agg(s_null, '-')",
         get_example().as_slice(),
         simulator,
     );

@@ -29,7 +29,7 @@ use common_expression::Evaluator;
 use common_expression::Expr;
 use common_expression::Scalar;
 use common_expression::Value;
-use common_functions::scalars::BUILTIN_FUNCTIONS;
+use common_functions::BUILTIN_FUNCTIONS;
 use common_hashtable::HashtableLike;
 use common_sql::executor::cast_expr_to_non_null_boolean;
 
@@ -193,7 +193,7 @@ impl JoinHashTable {
         let filter = cast_expr_to_non_null_boolean(filter.clone())?;
 
         let func_ctx = self.ctx.get_function_context()?;
-        let evaluator = Evaluator::new(merged_block, func_ctx, &BUILTIN_FUNCTIONS);
+        let evaluator = Evaluator::new(merged_block, &func_ctx, &BUILTIN_FUNCTIONS);
         let predicates = evaluator
             .run_auto_type(&filter)?
             .try_downcast::<BooleanType>()
@@ -215,7 +215,7 @@ impl JoinHashTable {
         filter: &Expr,
     ) -> Result<Column> {
         let func_ctx = self.ctx.get_function_context()?;
-        let evaluator = Evaluator::new(merged_block, func_ctx, &BUILTIN_FUNCTIONS);
+        let evaluator = Evaluator::new(merged_block, &func_ctx, &BUILTIN_FUNCTIONS);
 
         let filter_vector: Value<AnyType> = evaluator.run_auto_type(filter)?;
         let filter_vector =
@@ -253,7 +253,14 @@ impl JoinHashTable {
         &self,
         unmatched_build_indexes: &Vec<RowPtr>,
     ) -> Result<DataBlock> {
-        let mut unmatched_build_block = self.row_space.gather(unmatched_build_indexes)?;
+        let data_blocks = self.row_space.datablocks();
+        let num_rows = data_blocks
+            .iter()
+            .fold(0, |acc, chunk| acc + chunk.num_rows());
+
+        let mut unmatched_build_block =
+            self.row_space
+                .gather(unmatched_build_indexes, &data_blocks, &num_rows)?;
         if self.hash_join_desc.join_type == JoinType::Full {
             let num_rows = unmatched_build_block.num_rows();
             let nullable_unmatched_build_columns = unmatched_build_block
@@ -309,20 +316,29 @@ impl JoinHashTable {
     }
 
     pub(crate) fn rest_block(&self) -> Result<DataBlock> {
-        let rest_probe_blocks = self.hash_join_desc.join_state.rest_probe_blocks.read();
-        if rest_probe_blocks.is_empty() {
+        let data_blocks = self.row_space.datablocks();
+        let num_rows = data_blocks
+            .iter()
+            .fold(0, |acc, chunk| acc + chunk.num_rows());
+
+        let mut rest_pairs = self.hash_join_desc.join_state.rest_pairs.write();
+        if rest_pairs.0.is_empty() {
             return Ok(DataBlock::empty());
         }
-        let probe_block = DataBlock::concat(&rest_probe_blocks)?;
-        let rest_build_indexes = self.hash_join_desc.join_state.rest_build_indexes.read();
-        let mut build_block = self.row_space.gather(&rest_build_indexes)?;
+        let probe_block = DataBlock::concat(&rest_pairs.0)?;
+        rest_pairs.0.clear();
+        let mut build_block = self
+            .row_space
+            .gather(&rest_pairs.1, &data_blocks, &num_rows)?;
+        rest_pairs.1.clear();
         // For left join, wrap nullable for build block
         if matches!(
             self.hash_join_desc.join_type,
             JoinType::Left | JoinType::Single | JoinType::Full
         ) {
-            let validity = self.hash_join_desc.join_state.validity.read();
-            let validity: Bitmap = (*validity).clone().into();
+            let mut validity_state = self.hash_join_desc.join_state.validity.write();
+            let validity: Bitmap = (*validity_state).clone().into();
+            validity_state.clear();
             let num_rows = validity.len();
             let nullable_columns = if self.row_space.datablocks().is_empty() {
                 build_block
@@ -342,7 +358,6 @@ impl JoinHashTable {
             };
             build_block = DataBlock::new(nullable_columns, num_rows);
         }
-
         self.merge_eq_block(&build_block, &probe_block)
     }
 
@@ -365,7 +380,7 @@ impl JoinHashTable {
                 .collect::<Vec<_>>();
             data_block = DataBlock::new(nullable_columns, data_block.num_rows());
         }
-        let evaluator = Evaluator::new(&data_block, func_ctx, &BUILTIN_FUNCTIONS);
+        let evaluator = Evaluator::new(&data_block, &func_ctx, &BUILTIN_FUNCTIONS);
 
         let build_cols = self
             .hash_join_desc

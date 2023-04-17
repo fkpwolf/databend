@@ -30,7 +30,7 @@ use common_expression::Expr;
 use common_expression::FunctionContext;
 use common_expression::Scalar;
 use common_expression::TableSchemaRef;
-use common_functions::scalars::BUILTIN_FUNCTIONS;
+use common_functions::BUILTIN_FUNCTIONS;
 use storages_common_table_meta::meta::ColumnStatistics;
 use storages_common_table_meta::meta::StatisticsOfColumns;
 
@@ -85,7 +85,7 @@ impl RangeIndex {
         let (new_expr, _) = ConstantFolder::fold_with_domain(
             &self.expr,
             input_domains,
-            self.func_ctx,
+            &self.func_ctx,
             &BUILTIN_FUNCTIONS,
         );
 

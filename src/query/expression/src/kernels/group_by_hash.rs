@@ -719,6 +719,39 @@ pub fn fixed_hash(
                 }
             }
         }
+        Column::Decimal(c) => {
+            with_decimal_mapped_type!(|DECIMAL_TYPE| match c {
+                DecimalColumn::DECIMAL_TYPE(t, _) => {
+                    let mut ptr = ptr;
+                    let count = std::mem::size_of::<DECIMAL_TYPE>();
+                    match nulls {
+                        Some((offsize, Some(bitmap))) => {
+                            for (value, valid) in t.iter().zip(bitmap.iter()) {
+                                unsafe {
+                                    if valid {
+                                        let slice = std::slice::from_raw_parts_mut(ptr, count);
+                                        value.marshal(slice);
+                                    } else {
+                                        ptr.add(offsize).write(1u8);
+                                    }
+
+                                    ptr = ptr.add(step);
+                                }
+                            }
+                        }
+                        _ => {
+                            for value in t.iter() {
+                                unsafe {
+                                    let slice = std::slice::from_raw_parts_mut(ptr, count);
+                                    value.marshal(slice);
+                                    ptr = ptr.add(step);
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        }
         _ => {
             return Err(ErrorCode::BadDataValueType(format!(
                 "Unsupported apply fn fixed_hash operation for column: {:?}",

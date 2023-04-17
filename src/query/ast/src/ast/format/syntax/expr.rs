@@ -17,7 +17,7 @@ use pretty::RcDoc;
 use super::query::pretty_query;
 use crate::ast::format::syntax::inline_comma;
 use crate::ast::format::syntax::interweave_comma;
-use crate::ast::format::syntax::parenthenized;
+use crate::ast::format::syntax::parenthesized;
 use crate::ast::format::syntax::NEST_FACTOR;
 use crate::ast::BinaryOperator;
 use crate::ast::Expr;
@@ -120,7 +120,7 @@ pub(crate) fn pretty_expr(expr: Expr) -> RcDoc<'static> {
         Expr::BinaryOp {
             op, left, right, ..
         } => match op {
-            BinaryOperator::And | BinaryOperator::Or | BinaryOperator::Xor => parenthenized(
+            BinaryOperator::And | BinaryOperator::Or | BinaryOperator::Xor => parenthesized(
                 pretty_expr(*left)
                     .append(RcDoc::line_())
                     .append(RcDoc::text(op.to_string()))
@@ -296,7 +296,7 @@ pub(crate) fn pretty_expr(expr: Expr) -> RcDoc<'static> {
         }
         .append(RcDoc::text("EXISTS"))
         .append(RcDoc::space())
-        .append(parenthenized(pretty_query(*subquery))),
+        .append(parenthesized(pretty_query(*subquery))),
         Expr::Subquery {
             subquery, modifier, ..
         } => if let Some(m) = modifier {
@@ -304,7 +304,7 @@ pub(crate) fn pretty_expr(expr: Expr) -> RcDoc<'static> {
         } else {
             RcDoc::nil()
         }
-        .append(parenthenized(pretty_query(*subquery))),
+        .append(parenthesized(pretty_query(*subquery))),
         Expr::MapAccess { expr, accessor, .. } => pretty_expr(*expr).append(match accessor {
             MapAccessor::Bracket { key } => RcDoc::text("[")
                 .append(RcDoc::text(key.to_string()))
@@ -325,45 +325,6 @@ pub(crate) fn pretty_expr(expr: Expr) -> RcDoc<'static> {
                     .append(pretty_expr(v))
             })))
             .append(RcDoc::text("}")),
-        Expr::ArraySort {
-            expr,
-            asc,
-            null_first,
-            ..
-        } => {
-            let res = pretty_expr(*expr);
-            if asc {
-                res.clone()
-                    .append(RcDoc::text(","))
-                    .append(RcDoc::space())
-                    .append(RcDoc::text("'"))
-                    .append(RcDoc::text("ASC"))
-                    .append(RcDoc::text("'"));
-            } else {
-                res.clone()
-                    .append(RcDoc::text(","))
-                    .append(RcDoc::space())
-                    .append(RcDoc::text("'"))
-                    .append(RcDoc::text("DESC"))
-                    .append(RcDoc::text("'"));
-            }
-            if null_first {
-                res.clone()
-                    .append(RcDoc::text(","))
-                    .append(RcDoc::space())
-                    .append(RcDoc::text("'"))
-                    .append(RcDoc::text("NULL FIRST"))
-                    .append(RcDoc::text("'"));
-            } else {
-                res.clone()
-                    .append(RcDoc::text(","))
-                    .append(RcDoc::space())
-                    .append(RcDoc::text("'"))
-                    .append(RcDoc::text("NULL LAST"))
-                    .append(RcDoc::text("'"));
-            }
-            res.clone().append(RcDoc::text(")"))
-        }
         Expr::Interval { expr, unit, .. } => RcDoc::text("INTERVAL")
             .append(RcDoc::space())
             .append(pretty_expr(*expr))

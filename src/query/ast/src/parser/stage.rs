@@ -80,7 +80,7 @@ pub fn format_options(i: Input) -> IResult<BTreeMap<String, String>> {
 
     let option_compression = map(
         rule! {
-        (COMPRESSION ~ "=" ~ (AUTO | NONE |GZIP | BZ2 | BROTLI | ZSTD | DEFLATE | RAWDEFLATE | XZ ) )
+        (COMPRESSION ~ "=" ~ (AUTO | NONE | GZIP | BZ2 | BROTLI | ZSTD | DEFLATE | RAWDEFLATE | XZ ) )
         },
         |(_, _, v)| ("COMPRESSION".to_string(), v.text().to_string()),
     );
@@ -131,7 +131,7 @@ pub fn file_format_clause(i: Input) -> IResult<BTreeMap<String, String>> {
 pub fn options(i: Input) -> IResult<BTreeMap<String, String>> {
     map(
         rule! {
-            "(" ~ ( #ident_to_string ~ "=" ~ #parameter_to_string )* ~ ")"
+        "(" ~ ( #ident_to_string ~ "=" ~ #parameter_to_string )* ~ ")"
         },
         |(_, opts, _)| {
             BTreeMap::from_iter(opts.iter().map(|(k, _, v)| (k.to_lowercase(), v.clone())))
