@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,12 @@ use common_meta_raft_store::config::RaftConfig;
 use common_meta_raft_store::key_spaces::RaftStoreEntry;
 use common_meta_raft_store::key_spaces::RaftStoreEntryCompat;
 use common_meta_raft_store::log::RaftLog;
+use common_meta_raft_store::log::TREE_RAFT_LOG;
+use common_meta_raft_store::ondisk::DataVersion;
+use common_meta_raft_store::ondisk::DATA_VERSION;
+use common_meta_raft_store::ondisk::TREE_HEADER;
 use common_meta_raft_store::state::RaftState;
+use common_meta_raft_store::state::TREE_RAFT_STATE;
 use common_meta_raft_store::state_machine::StateMachine;
 use common_meta_sled_store::get_sled_db;
 use common_meta_sled_store::init_sled_db;
@@ -68,7 +73,7 @@ pub async fn export_data(config: &Config) -> anyhow::Result<()> {
 
 pub async fn import_data(config: &Config) -> anyhow::Result<()> {
     let raft_config = &config.raft_config;
-    eprintln!("import meta dir into: {}", raft_config.raft_dir);
+    eprintln!("    Into Meta Dir: '{}'", raft_config.raft_dir);
 
     let nodes = build_nodes(config.initial_cluster.clone(), raft_config.id)?;
 
@@ -91,7 +96,50 @@ fn import_lines<B: BufRead>(lines: Lines<B>) -> anyhow::Result<Option<LogId>> {
     let mut trees = BTreeMap::new();
     let mut n = 0;
     let mut max_log_id: Option<LogId> = None;
-    for line in lines {
+
+    #[allow(clippy::useless_conversion)]
+    let mut it = lines.into_iter();
+
+    // First line is the data header that containing version.
+    {
+        let first_line = it
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no data to import"))??;
+
+        let (tree_name, kv_entry): (String, RaftStoreEntryCompat) =
+            serde_json::from_str(&first_line)?;
+
+        let kv_entry = kv_entry.upgrade();
+
+        let version = if tree_name == TREE_HEADER {
+            // There is a explicit header.
+            if let RaftStoreEntry::DataHeader { key, value } = &kv_entry {
+                assert_eq!(key, "header", "The key can only be 'header'");
+                value.version
+            } else {
+                unreachable!("The header tree can only contain DataHeader");
+            }
+        } else {
+            // Without header, the data version is V0 by default.
+            DataVersion::V0
+        };
+
+        if version != DATA_VERSION {
+            return Err(anyhow!(
+                "invalid data version: {:?}, This program can only import {:?}",
+                version,
+                DATA_VERSION
+            ));
+        }
+
+        let (k, v) = RaftStoreEntry::serialize(&kv_entry)?;
+
+        let tree = db.open_tree(&tree_name)?;
+        tree.insert(k, v)?;
+        tree.flush()?;
+    }
+
+    for line in it {
         let l = line?;
         let (tree_name, kv_entry): (String, RaftStoreEntryCompat) = serde_json::from_str(&l)?;
         let kv_entry = kv_entry.upgrade();
@@ -152,7 +200,7 @@ fn import_from(restore: String) -> anyhow::Result<Option<LogId>> {
 /// Raw config is: `<NodeId>=<raft-api-host>:<raft-api-port>[,...]`, e.g. `1=localhost:29103` or `1=localhost:29103,0.0.0.0:19191`
 /// The second part is obsolete grpc api address and will be just ignored. Databend-meta loads Grpc address from config file when starting up.
 fn build_nodes(initial_cluster: Vec<String>, id: u64) -> anyhow::Result<BTreeMap<NodeId, Node>> {
-    eprintln!("init-cluster: id={}, {:?}", id, initial_cluster);
+    eprintln!("Initialize Cluster: id={}, {:?}", id, initial_cluster);
 
     let mut nodes = BTreeMap::new();
     for peer in initial_cluster {
@@ -209,7 +257,7 @@ async fn init_new_cluster(
     max_log_id: Option<LogId>,
     id: u64,
 ) -> anyhow::Result<()> {
-    eprintln!("init-cluster: {:?}", nodes);
+    eprintln!("Initialize Cluster with: {:?}", nodes);
 
     let node_ids = nodes.keys().copied().collect::<BTreeSet<_>>();
 
@@ -303,31 +351,49 @@ fn clear() -> anyhow::Result<()> {
 fn export_from_dir(config: &Config) -> anyhow::Result<()> {
     let db = get_sled_db();
 
+    eprintln!("    From: {}", config.raft_config.raft_dir);
+
     let file: Option<File> = if !config.db.is_empty() {
-        eprintln!(
-            "export meta dir from: {} to {}",
-            config.raft_config.raft_dir, config.db
-        );
+        eprintln!("    To:   File: {}", config.db);
         Some((File::create(&config.db))?)
     } else {
-        eprintln!("export meta dir from: {}", config.raft_config.raft_dir);
+        eprintln!("    To:   <stdout>");
         None
     };
 
     let mut cnt = 0;
-    let mut tree_names = db.tree_names();
-    tree_names.sort();
-    for n in tree_names.iter() {
-        let name = String::from_utf8(n.to_vec())?;
+    let mut present_tree_names = {
+        let mut tree_names = BTreeSet::new();
+        for n in db.tree_names() {
+            let name = String::from_utf8(n.to_vec())?;
+            tree_names.insert(name);
+        }
+        tree_names
+    };
 
-        let tree = db.open_tree(&name)?;
-        for x in tree.iter() {
-            let kv = x?;
+    // Export in header, raft_state, log and other order.
+    let mut tree_names = vec![];
+
+    for name in [TREE_HEADER, TREE_RAFT_STATE, TREE_RAFT_LOG] {
+        if present_tree_names.remove(name) {
+            tree_names.push(name.to_string());
+        } else {
+            eprintln!("tree {} not found", name);
+        }
+    }
+    tree_names.extend(present_tree_names.into_iter().collect::<Vec<_>>());
+
+    for tree_name in tree_names.iter() {
+        eprintln!("Exporting: sled tree: '{}'...", tree_name);
+
+        let tree = db.open_tree(tree_name)?;
+        for ivec_pair_res in tree.iter() {
+            let kv = ivec_pair_res?;
             let k = kv.0.to_vec();
             let v = kv.1.to_vec();
 
             let kv_entry = RaftStoreEntry::deserialize(&k, &v)?;
-            let tree_kv = (name.clone(), kv_entry);
+            let tree_kv = (tree_name.clone(), kv_entry);
 
             let line = serde_json::to_string(&tree_kv)?;
             cnt += 1;
@@ -346,14 +412,14 @@ fn export_from_dir(config: &Config) -> anyhow::Result<()> {
         file.as_ref().unwrap().sync_all()?
     }
 
-    eprintln!("export {} records", cnt);
+    eprintln!("Exported {} records", cnt);
 
     Ok(())
 }
 
 /// Dump metasrv data, raft-log, state machine etc in json to stdout.
 async fn export_from_running_node(config: &Config) -> Result<(), anyhow::Error> {
-    eprintln!("export meta dir from remote: {}", config.grpc_api_address);
+    eprintln!("    From: online meta-service: {}", config.grpc_api_address);
 
     let grpc_api_addr = get_available_socket_addr(&config.grpc_api_address).await?;
 
@@ -362,7 +428,7 @@ async fn export_from_running_node(config: &Config) -> Result<(), anyhow::Error> 
 }
 
 // if port is open, service is running
-async fn service_is_running(addr: SocketAddr) -> Result<bool, io::Error> {
+async fn is_service_running(addr: SocketAddr) -> Result<bool, io::Error> {
     let socket = TcpSocket::new_v4()?;
     let stream = socket.connect(addr).await;
 
@@ -373,7 +439,7 @@ async fn service_is_running(addr: SocketAddr) -> Result<bool, io::Error> {
 async fn get_available_socket_addr(endpoint: &str) -> Result<SocketAddr, anyhow::Error> {
     let addrs_iter = endpoint.to_socket_addrs()?;
     for addr in addrs_iter {
-        if service_is_running(addr).await? {
+        if is_service_running(addr).await? {
             return Ok(addr);
         }
         eprintln!("WARN: {} is not available", addr);

@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -30,7 +30,6 @@ use opendal::raw::Layer;
 use opendal::raw::LayeredAccessor;
 use opendal::raw::RpList;
 use opendal::raw::RpRead;
-use opendal::raw::RpScan;
 use opendal::raw::RpWrite;
 use opendal::Result;
 
@@ -197,11 +196,6 @@ impl<A: Accessor> LayeredAccessor for StorageMetricsAccessor<A> {
         self.inner.list(path, args).await
     }
 
-    #[async_backtrace::framed]
-    async fn scan(&self, path: &str, args: OpScan) -> Result<(RpScan, Self::Pager)> {
-        self.inner.scan(path, args).await
-    }
-
     fn blocking_read(&self, path: &str, args: OpRead) -> Result<(RpRead, Self::BlockingReader)> {
         self.inner
             .blocking_read(path, args)
@@ -216,10 +210,6 @@ impl<A: Accessor> LayeredAccessor for StorageMetricsAccessor<A> {
 
     fn blocking_list(&self, path: &str, args: OpList) -> Result<(RpList, Self::BlockingPager)> {
         self.inner.blocking_list(path, args)
-    }
-
-    fn blocking_scan(&self, path: &str, args: OpScan) -> Result<(RpScan, Self::BlockingPager)> {
-        self.inner.blocking_scan(path, args)
     }
 }
 
@@ -306,17 +296,8 @@ impl<R: oio::Write> oio::Write for StorageMetricsWrapper<R> {
     }
 
     #[async_backtrace::framed]
-    async fn append(&mut self, bs: Bytes) -> Result<()> {
-        let size = bs.len();
-        let start = Instant::now();
-
-        let result = self.inner.append(bs).await;
-        if result.is_ok() {
-            self.metrics.inc_write_bytes(size);
-            self.metrics
-                .inc_write_bytes_cost(start.elapsed().as_millis() as u64);
-        }
-        result
+    async fn abort(&mut self) -> Result<()> {
+        self.inner.abort().await
     }
 
     #[async_backtrace::framed]
@@ -332,19 +313,6 @@ impl<R: oio::BlockingWrite> oio::BlockingWrite for StorageMetricsWrapper<R> {
         let start = Instant::now();
 
         let result = self.inner.write(bs);
-        if result.is_ok() {
-            self.metrics.inc_write_bytes(size);
-            self.metrics
-                .inc_write_bytes_cost(start.elapsed().as_millis() as u64);
-        }
-        result
-    }
-
-    fn append(&mut self, bs: Bytes) -> Result<()> {
-        let size = bs.len();
-        let start = Instant::now();
-
-        let result = self.inner.append(bs);
         if result.is_ok() {
             self.metrics.inc_write_bytes(size);
             self.metrics

@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ use std::fmt::Display;
 
 use common_catalog::plan::DataSourcePlan;
 use common_catalog::plan::InternalColumn;
+use common_catalog::plan::Projection;
 use common_exception::Result;
 use common_expression::types::DataType;
 use common_expression::types::NumberDataType;
@@ -27,6 +28,7 @@ use common_expression::DataSchemaRefExt;
 use common_expression::FieldIndex;
 use common_expression::RemoteExpr;
 use common_expression::Scalar;
+use common_functions::aggregates::AggregateFunctionFactory;
 use common_functions::BUILTIN_FUNCTIONS;
 use common_meta_app::schema::TableInfo;
 
@@ -247,6 +249,7 @@ impl AggregatePartial {
                             .clone())
                     })
                     .collect::<Result<Vec<_>>>()?,
+                false,
             )?;
             fields.push(DataField::new("_group_by_key", method.data_type()));
         }
@@ -274,7 +277,7 @@ impl AggregateFinal {
     pub fn output_schema(&self) -> Result<DataSchemaRef> {
         let mut fields = Vec::with_capacity(self.agg_funcs.len() + self.group_by.len());
         for agg in self.agg_funcs.iter() {
-            let data_type = agg.sig.return_type.clone();
+            let data_type = agg.sig.return_type()?;
             fields.push(DataField::new(&agg.output_column.to_string(), data_type));
         }
         for id in self.group_by.iter() {
@@ -295,15 +298,17 @@ pub enum WindowFunction {
     RowNumber,
     Rank,
     DenseRank,
+    PercentRank,
 }
 
 impl WindowFunction {
-    fn data_type(&self) -> DataType {
+    fn data_type(&self) -> Result<DataType> {
         match self {
-            WindowFunction::Aggregate(agg) => agg.sig.return_type.clone(),
+            WindowFunction::Aggregate(agg) => agg.sig.return_type(),
             WindowFunction::RowNumber | WindowFunction::Rank | WindowFunction::DenseRank => {
-                DataType::Number(NumberDataType::UInt64)
+                Ok(DataType::Number(NumberDataType::UInt64))
             }
+            WindowFunction::PercentRank => Ok(DataType::Number(NumberDataType::Float64)),
         }
     }
 }
@@ -315,6 +320,7 @@ impl Display for WindowFunction {
             WindowFunction::RowNumber => write!(f, "row_number"),
             WindowFunction::Rank => write!(f, "rank"),
             WindowFunction::DenseRank => write!(f, "dense_rank"),
+            WindowFunction::PercentRank => write!(f, "percent_rank"),
         }
     }
 }
@@ -337,7 +343,7 @@ impl Window {
         fields.extend_from_slice(input_schema.fields());
         fields.push(DataField::new(
             &self.index.to_string(),
-            self.func.data_type(),
+            self.func.data_type()?,
         ));
         Ok(DataSchemaRefExt::create(fields))
     }
@@ -381,6 +387,35 @@ pub struct Limit {
 impl Limit {
     pub fn output_schema(&self) -> Result<DataSchemaRef> {
         self.input.output_schema()
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RowFetch {
+    /// A unique id of operator in a `PhysicalPlan` tree.
+    /// Only used for display.
+    pub plan_id: u32,
+
+    pub input: Box<PhysicalPlan>,
+
+    // cloned from `input`.
+    pub source: Box<DataSourcePlan>,
+    // projection on the source table schema.
+    pub cols_to_fetch: Projection,
+
+    pub row_id_col_offset: usize,
+
+    pub fetched_fields: Vec<DataField>,
+
+    /// Only used for explain
+    pub stat_info: Option<PlanStatsInfo>,
+}
+
+impl RowFetch {
+    pub fn output_schema(&self) -> Result<DataSchemaRef> {
+        let mut fields = self.input.output_schema()?.fields().clone();
+        fields.extend_from_slice(&self.fetched_fields);
+        Ok(DataSchemaRefExt::create(fields))
     }
 }
 
@@ -623,6 +658,7 @@ pub enum PhysicalPlan {
     Window(Window),
     Sort(Sort),
     Limit(Limit),
+    RowFetch(RowFetch),
     HashJoin(HashJoin),
     Exchange(Exchange),
     UnionAll(UnionAll),
@@ -657,6 +693,7 @@ impl PhysicalPlan {
             PhysicalPlan::Window(plan) => plan.output_schema(),
             PhysicalPlan::Sort(plan) => plan.output_schema(),
             PhysicalPlan::Limit(plan) => plan.output_schema(),
+            PhysicalPlan::RowFetch(plan) => plan.output_schema(),
             PhysicalPlan::HashJoin(plan) => plan.output_schema(),
             PhysicalPlan::Exchange(plan) => plan.output_schema(),
             PhysicalPlan::ExchangeSource(plan) => plan.output_schema(),
@@ -680,6 +717,7 @@ impl PhysicalPlan {
             PhysicalPlan::Window(_) => "Window".to_string(),
             PhysicalPlan::Sort(_) => "Sort".to_string(),
             PhysicalPlan::Limit(_) => "Limit".to_string(),
+            PhysicalPlan::RowFetch(_) => "RowFetch".to_string(),
             PhysicalPlan::HashJoin(_) => "HashJoin".to_string(),
             PhysicalPlan::Exchange(_) => "Exchange".to_string(),
             PhysicalPlan::UnionAll(_) => "UnionAll".to_string(),
@@ -703,6 +741,7 @@ impl PhysicalPlan {
             PhysicalPlan::Window(plan) => Box::new(std::iter::once(plan.input.as_ref())),
             PhysicalPlan::Sort(plan) => Box::new(std::iter::once(plan.input.as_ref())),
             PhysicalPlan::Limit(plan) => Box::new(std::iter::once(plan.input.as_ref())),
+            PhysicalPlan::RowFetch(plan) => Box::new(std::iter::once(plan.input.as_ref())),
             PhysicalPlan::HashJoin(plan) => Box::new(
                 std::iter::once(plan.probe.as_ref()).chain(std::iter::once(plan.build.as_ref())),
             ),
@@ -722,6 +761,31 @@ impl PhysicalPlan {
             ),
         }
     }
+
+    /// Used to find data source info in a non-aggregation and single-table query plan.
+    pub fn try_find_single_data_source(&self) -> Option<&DataSourcePlan> {
+        match self {
+            PhysicalPlan::TableScan(scan) => Some(&scan.source),
+            PhysicalPlan::Filter(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::Project(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::EvalScalar(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::Window(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::Sort(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::Limit(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::Exchange(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::ExchangeSink(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::DistributedInsertSelect(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::ProjectSet(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::RowFetch(plan) => plan.input.try_find_single_data_source(),
+            PhysicalPlan::RuntimeFilterSource(_)
+            | PhysicalPlan::UnionAll(_)
+            | PhysicalPlan::ExchangeSource(_)
+            | PhysicalPlan::HashJoin(_)
+            | PhysicalPlan::AggregateExpand(_)
+            | PhysicalPlan::AggregateFinal(_)
+            | PhysicalPlan::AggregatePartial(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -735,9 +799,8 @@ pub struct AggregateFunctionDesc {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AggregateFunctionSignature {
     pub name: String,
-    pub args: Vec<DataType>,
     pub params: Vec<Scalar>,
-    pub return_type: DataType,
+    pub args: Vec<DataType>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -745,4 +808,12 @@ pub struct SortDesc {
     pub asc: bool,
     pub nulls_first: bool,
     pub order_by: IndexType,
+}
+
+impl AggregateFunctionSignature {
+    pub fn return_type(&self) -> Result<DataType> {
+        AggregateFunctionFactory::instance()
+            .get(&self.name, self.params.clone(), self.args.clone())?
+            .return_type()
+    }
 }

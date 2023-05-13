@@ -1,16 +1,16 @@
-//  Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use common_exception::Result;
 use common_expression::BlockThresholds;
@@ -31,10 +31,11 @@ pub struct ClusterStatsGenerator {
     max_page_size: Option<usize>,
 
     level: i32,
-    block_compact_thresholds: BlockThresholds,
-    operators: Vec<BlockOperator>,
+    block_thresholds: BlockThresholds,
+
+    pub(crate) operators: Vec<BlockOperator>,
     pub(crate) out_fields: Vec<DataField>,
-    func_ctx: FunctionContext,
+    pub(crate) func_ctx: FunctionContext,
 }
 
 impl ClusterStatsGenerator {
@@ -45,7 +46,7 @@ impl ClusterStatsGenerator {
         extra_key_num: usize,
         max_page_size: Option<usize>,
         level: i32,
-        block_compact_thresholds: BlockThresholds,
+        block_thresholds: BlockThresholds,
         operators: Vec<BlockOperator>,
         out_fields: Vec<DataField>,
         func_ctx: FunctionContext,
@@ -56,7 +57,7 @@ impl ClusterStatsGenerator {
             extra_key_num,
             max_page_size,
             level,
-            block_compact_thresholds,
+            block_thresholds,
             operators,
             out_fields,
             func_ctx,
@@ -67,22 +68,18 @@ impl ClusterStatsGenerator {
         !self.cluster_key_index.is_empty()
     }
 
-    pub fn block_compact_thresholds(&self) -> BlockThresholds {
-        self.block_compact_thresholds
+    pub fn block_thresholds(&self) -> BlockThresholds {
+        self.block_thresholds
     }
 
     // This can be used in block append.
     // The input block contains the cluster key block.
     pub fn gen_stats_for_append(
         &self,
-        data_block: &DataBlock,
+        data_block: DataBlock,
     ) -> Result<(Option<ClusterStatistics>, DataBlock)> {
-        let cluster_stats = self.clusters_statistics(data_block, self.level)?;
-        // TODO why clone the block here?
-        let mut block = data_block.clone();
-
-        block = block.pop_columns(self.extra_key_num)?;
-
+        let cluster_stats = self.clusters_statistics(&data_block, self.level)?;
+        let block = data_block.pop_columns(self.extra_key_num)?;
         Ok((cluster_stats, block))
     }
 
@@ -139,7 +136,7 @@ impl ClusterStatsGenerator {
 
         let level = if min == max
             && self
-                .block_compact_thresholds
+                .block_thresholds
                 .check_perfect_block(data_block.num_rows(), data_block.memory_size())
         {
             -1

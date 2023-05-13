@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
 
 use common_ast::ast::Engine;
 use common_base::base::tokio;
@@ -24,13 +23,12 @@ use databend_query::interpreters::AlterTableClusterKeyInterpreter;
 use databend_query::interpreters::CreateTableInterpreter;
 use databend_query::interpreters::DropTableClusterKeyInterpreter;
 use databend_query::interpreters::Interpreter;
+use databend_query::test_kits::table_test_fixture::TestFixture;
 use storages_common_cache::LoadParams;
 use storages_common_table_meta::meta::TableSnapshot;
 use storages_common_table_meta::meta::Versioned;
 use storages_common_table_meta::table::OPT_KEY_DATABASE_ID;
 use storages_common_table_meta::table::OPT_KEY_SNAPSHOT_LOCATION;
-
-use crate::storages::fuse::table_test_fixture::TestFixture;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fuse_alter_table_cluster_key() -> common_exception::Result<()> {

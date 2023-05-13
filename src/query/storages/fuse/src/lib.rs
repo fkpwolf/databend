@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #![allow(clippy::uninlined_format_args)]
-//#![deny(unused_crate_dependencies)]
 #![feature(type_alias_impl_trait)]
 #![feature(io_error_other)]
 #![feature(once_cell)]

@@ -487,6 +487,9 @@ ul li{
 .navbar-sidebar{
     height: 100vh;
 }
+.navbar-sidebar__items {
+  padding-bottom: 4rem;
+}
 
 .docs-wrapper.docs-doc-page .footer{
   width: 100%;
@@ -495,4 +498,7 @@ ul li{
 }
 .tabs-container p{
   margin-bottom: var(--ifm-leading);
+}
+.iframe-video {
+  max-width: 100%;
 }

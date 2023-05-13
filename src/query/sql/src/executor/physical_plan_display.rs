@@ -1,16 +1,16 @@
-//  Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -21,6 +21,7 @@ use itertools::Itertools;
 use super::AggregateExpand;
 use super::DistributedInsertSelect;
 use super::ProjectSet;
+use super::RowFetch;
 use crate::executor::AggregateFinal;
 use crate::executor::AggregatePartial;
 use crate::executor::EvalScalar;
@@ -65,6 +66,7 @@ impl<'a> Display for PhysicalPlanIndentFormatDisplay<'a> {
             PhysicalPlan::Window(window) => write!(f, "{}", window)?,
             PhysicalPlan::Sort(sort) => write!(f, "{}", sort)?,
             PhysicalPlan::Limit(limit) => write!(f, "{}", limit)?,
+            PhysicalPlan::RowFetch(row_fetch) => write!(f, "{}", row_fetch)?,
             PhysicalPlan::HashJoin(join) => write!(f, "{}", join)?,
             PhysicalPlan::Exchange(exchange) => write!(f, "{}", exchange)?,
             PhysicalPlan::ExchangeSource(source) => write!(f, "{}", source)?,
@@ -245,6 +247,12 @@ impl Display for Limit {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let limit = self.limit.as_ref().cloned().unwrap_or(0);
         write!(f, "Limit: [{}], Offset: [{}]", limit, self.offset)
+    }
+}
+
+impl Display for RowFetch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RowFetch: [{:?}]", self.cols_to_fetch)
     }
 }
 

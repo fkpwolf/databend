@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::BitAnd;
 use std::ops::BitOr;
@@ -33,6 +34,7 @@ use crate::property::Domain;
 use crate::property::FunctionProperty;
 use crate::type_check::try_unify_signature;
 use crate::types::nullable::NullableColumn;
+use crate::types::nullable::NullableDomain;
 use crate::types::*;
 use crate::utils::arrow::constant_bitmap;
 use crate::values::Value;
@@ -77,8 +79,11 @@ pub enum FunctionEval {
     SRF {
         /// Given multiple rows, return multiple sets of results
         /// for each input row, along with the number of rows in each set.
-        eval:
-            Box<dyn Fn(&[ValueRef<AnyType>], usize) -> Vec<(Value<AnyType>, usize)> + Send + Sync>,
+        eval: Box<
+            dyn Fn(&[ValueRef<AnyType>], &mut EvalContext) -> Vec<(Value<AnyType>, usize)>
+                + Send
+                + Sync,
+        >,
     },
 }
 
@@ -96,7 +101,6 @@ pub struct FunctionContext {
 pub struct EvalContext<'a> {
     pub generics: &'a GenericMap,
     pub num_rows: usize,
-    pub tz: TzLUT,
 
     pub func_ctx: &'a FunctionContext,
     /// Validity bitmap of outer nullable column. This is an optimization
@@ -133,7 +137,7 @@ pub struct FunctionRegistry {
 
     /// Default cast rules for all functions.
     pub default_cast_rules: Vec<(DataType, DataType)>,
-    /// Cast rules for specific functions, excluding the default cast rules.
+    /// Cast rules for specific functions, in addition to default cast rules.
     pub additional_cast_rules: HashMap<String, Vec<(DataType, DataType)>>,
     /// The auto rules that should use TRY_CAST instead of CAST.
     pub auto_try_cast_rules: Vec<(DataType, DataType)>,
@@ -158,6 +162,62 @@ impl Function {
             eval: FunctionEval::Scalar {
                 calc_domain: Box::new(|_| FunctionDomain::Full),
                 eval: Box::new(wrap_nullable(eval)),
+            },
+        }
+    }
+
+    pub fn error_to_null(self) -> Self {
+        let mut signature = self.signature;
+        debug_assert!(!signature.return_type.is_nullable_or_null());
+        signature.return_type = signature.return_type.wrap_nullable();
+
+        let (calc_domain, eval) = self.eval.into_scalar().unwrap();
+
+        let new_calc_domain = Box::new(move |domains: &[Domain]| {
+            let domain = calc_domain(domains);
+            match domain {
+                FunctionDomain::Domain(domain) => {
+                    let new_domain = NullableDomain {
+                        has_null: false,
+                        value: Some(Box::new(domain)),
+                    };
+                    FunctionDomain::Domain(NullableType::<AnyType>::upcast_domain(new_domain))
+                }
+                // Here we convert MayThrow to full, this may lose some internal information since it's runtime adpator
+                FunctionDomain::Full | FunctionDomain::MayThrow => FunctionDomain::Full,
+            }
+        });
+        let new_eval = Box::new(move |val: &[ValueRef<AnyType>], ctx: &mut EvalContext| {
+            let num_rows = ctx.num_rows;
+            let output = eval(val, ctx);
+            if let Some((validity, _)) = ctx.errors.take() {
+                match output {
+                    Value::Scalar(_) => Value::Scalar(Scalar::Null),
+                    Value::Column(column) => {
+                        Value::Column(Column::Nullable(Box::new(NullableColumn {
+                            column,
+                            validity: validity.into(),
+                        })))
+                    }
+                }
+            } else {
+                match output {
+                    Value::Scalar(scalar) => Value::Scalar(scalar),
+                    Value::Column(column) => {
+                        Value::Column(Column::Nullable(Box::new(NullableColumn {
+                            column,
+                            validity: constant_bitmap(true, num_rows).into(),
+                        })))
+                    }
+                }
+            }
+        });
+
+        Function {
+            signature,
+            eval: FunctionEval::Scalar {
+                calc_domain: new_calc_domain,
+                eval: new_eval,
             },
         }
     }
@@ -405,10 +465,10 @@ impl FunctionID {
         }
     }
 
-    pub fn name(&self) -> &String {
+    pub fn name(&self) -> Cow<'_, str> {
         match self {
-            FunctionID::Builtin { name, .. } => name,
-            FunctionID::Factory { name, .. } => name,
+            FunctionID::Builtin { name, .. } => Cow::Borrowed(name),
+            FunctionID::Factory { name, .. } => Cow::Borrowed(name),
         }
     }
 
@@ -445,7 +505,13 @@ impl<'a> EvalContext<'a> {
         }
     }
 
-    pub fn render_error(&self, span: Span, args: &[Value<AnyType>], func_name: &str) -> Result<()> {
+    pub fn render_error(
+        &self,
+        span: Span,
+        params: &[usize],
+        args: &[Value<AnyType>],
+        func_name: &str,
+    ) -> Result<()> {
         match &self.errors {
             Some((valids, error)) => {
                 let first_error_row = valids
@@ -464,10 +530,16 @@ impl<'a> EvalContext<'a> {
                     })
                     .join(", ");
 
-                Err(ErrorCode::Internal(format!(
-                    "{error} while evaluating function `{func_name}({args})`"
-                ))
-                .set_span(span))
+                let err_msg = if params.is_empty() {
+                    format!("{error} while evaluating function `{func_name}({args})`")
+                } else {
+                    format!(
+                        "{error} while evaluating function `{func_name}({params})({args})`",
+                        params = params.iter().join(", ")
+                    )
+                };
+
+                Err(ErrorCode::Internal(err_msg).set_span(span))
             }
             None => Ok(()),
         }
@@ -548,6 +620,7 @@ pub fn error_to_null<I1: ArgType, O: ArgType>(
     func: impl for<'a> Fn(ValueRef<'a, I1>, &mut EvalContext) -> Value<O> + Copy + Send + Sync,
 ) -> impl for<'a> Fn(ValueRef<'a, I1>, &mut EvalContext) -> Value<NullableType<O>> + Copy + Send + Sync
 {
+    debug_assert!(!O::data_type().is_nullable_or_null());
     move |val, ctx| {
         let output = func(val, ctx);
         if let Some((validity, _)) = ctx.errors.take() {

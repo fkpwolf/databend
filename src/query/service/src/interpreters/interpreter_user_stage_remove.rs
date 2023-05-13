@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -68,8 +68,16 @@ impl Interpreter for RemoveUserStageInterpreter {
 
         let table_ctx: Arc<dyn TableContext> = self.ctx.clone();
         let file_op = Files::create(table_ctx, op);
-        if let Err(e) = file_op.remove_file_in_batch(&files).await {
-            error!("Failed to delete file: {:?}, error: {}", files, e);
+
+        const REMOVE_BATCH: usize = 4000;
+        for chunk in files.chunks(REMOVE_BATCH) {
+            if let Err(e) = file_op.remove_file_in_batch(chunk).await {
+                error!("Failed to delete file: {:?}, error: {}", chunk, e);
+            }
+
+            if self.ctx.check_aborting().is_err() {
+                return Ok(PipelineBuildResult::create());
+            }
         }
 
         Ok(PipelineBuildResult::create())

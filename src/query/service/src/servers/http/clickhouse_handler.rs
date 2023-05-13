@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -275,7 +275,7 @@ pub async fn clickhouse_handler_post(
         .await
         .map_err(InternalServerError)?;
 
-    let settings = ctx.get_settings();
+    let settings = session.get_settings();
     settings
         .set_batch_settings(&params.settings)
         .map_err(BadRequest)?;
@@ -328,7 +328,7 @@ pub async fn clickhouse_handler_post(
                     ctx.get_settings(),
                     table_schema,
                     ctx.get_scan_progress(),
-                    to_table.get_block_compact_thresholds(),
+                    to_table.get_block_thresholds(),
                 )
                 .await
                 .map_err(InternalServerError)?,
@@ -377,7 +377,7 @@ pub async fn clickhouse_handler_post(
                     table_schema,
                     ctx.get_scan_progress(),
                     false,
-                    to_table.get_block_compact_thresholds(),
+                    to_table.get_block_thresholds(),
                 )
                 .await
                 .map_err(|err| err.display_with_sql(&sql))

@@ -1,16 +1,16 @@
-//  Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -39,6 +39,7 @@ use storages_common_table_meta::meta::Location;
 use storages_common_table_meta::meta::SegmentInfo;
 use storages_common_table_meta::meta::Statistics;
 use storages_common_table_meta::table::TableCompression;
+use tracing::info;
 
 use super::AppendOperationLogEntry;
 use crate::io;
@@ -217,7 +218,7 @@ impl Processor for FuseTableSink {
         match std::mem::replace(&mut self.state, State::None) {
             State::NeedSerialize(data_block) => {
                 let (cluster_stats, block) =
-                    self.cluster_stats_gen.gen_stats_for_append(&data_block)?;
+                    self.cluster_stats_gen.gen_stats_for_append(data_block)?;
 
                 let (block_location, block_id) = self.meta_locations.gen_block_location();
 
@@ -271,14 +272,14 @@ impl Processor for FuseTableSink {
                 });
 
                 self.state = State::SerializedSegment {
-                    data: serde_json::to_vec(&segment_info)?,
+                    data: segment_info.to_bytes()?,
                     location: self.meta_locations.gen_segment_info_location(),
                     segment: Arc::new(segment_info),
                 }
             }
             State::PreCommitSegment { location, segment } => {
                 if let Some(segment_cache) = SegmentInfo::cache() {
-                    segment_cache.put(location.clone(), segment.clone());
+                    segment_cache.put(location.clone(), Arc::new(segment.as_ref().try_into()?));
                 }
 
                 // TODO: dyn operation for table trait
@@ -371,6 +372,7 @@ impl Processor for FuseTableSink {
                 segment,
             } => {
                 self.data_accessor.write(&location, data).await?;
+                info!("fuse sink wrote down segment {} ", location);
 
                 self.state = State::PreCommitSegment { location, segment };
             }

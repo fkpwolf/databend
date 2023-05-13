@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -31,12 +32,14 @@ use common_expression::types::DataType;
 use common_expression::ConstantFolder;
 use common_expression::DataBlock;
 use common_expression::DataField;
+use common_expression::DataSchema;
 use common_expression::DataSchemaRefExt;
-use common_expression::Expr;
 use common_expression::FunctionContext;
 use common_expression::RemoteExpr;
 use common_expression::TableSchema;
+use common_expression::ROW_ID_COL_NAME;
 use common_functions::BUILTIN_FUNCTIONS;
+use itertools::Itertools;
 
 use super::cast_expr_to_non_null_boolean;
 use super::AggregateExpand;
@@ -44,18 +47,20 @@ use super::AggregateFinal;
 use super::AggregateFunctionDesc;
 use super::AggregateFunctionSignature;
 use super::AggregatePartial;
+use super::EvalScalar;
 use super::Exchange as PhysicalExchange;
 use super::Filter;
 use super::HashJoin;
 use super::Limit;
 use super::ProjectSet;
+use super::RowFetch;
 use super::Sort;
 use super::TableScan;
 use super::WindowFunction;
 use crate::binder::wrap_cast;
+use crate::binder::INTERNAL_COLUMN_FACTORY;
 use crate::executor::explain::PlanStatsInfo;
 use crate::executor::table_read_plan::ToReadDataSourcePlan;
-use crate::executor::EvalScalar;
 use crate::executor::FragmentKind;
 use crate::executor::PhysicalPlan;
 use crate::executor::RuntimeFilterSource;
@@ -65,22 +70,28 @@ use crate::executor::Window;
 use crate::optimizer::ColumnSet;
 use crate::optimizer::RelExpr;
 use crate::optimizer::SExpr;
+use crate::planner;
 use crate::plans::AggregateMode;
+use crate::plans::BoundColumnRef;
 use crate::plans::Exchange;
 use crate::plans::FunctionCall;
 use crate::plans::JoinType;
 use crate::plans::RelOperator;
 use crate::plans::ScalarExpr;
+use crate::plans::ScalarItem;
 use crate::plans::Scan;
 use crate::plans::WindowFuncType;
 use crate::BaseTableColumn;
+use crate::ColumnBinding;
 use crate::ColumnEntry;
 use crate::DerivedColumn;
+use crate::IndexType;
 use crate::Metadata;
 use crate::MetadataRef;
 use crate::TableInternalColumn;
 use crate::TypeCheck;
 use crate::VirtualColumn;
+use crate::Visibility;
 use crate::DUMMY_COLUMN_INDEX;
 use crate::DUMMY_TABLE_INDEX;
 
@@ -116,11 +127,15 @@ impl PhysicalPlanBuilder {
         has_inner_column: bool,
         ignore_internal_column: bool,
         add_virtual_source_column: bool,
+        ignore_lazy_column: bool,
     ) -> Projection {
         if !has_inner_column {
             let mut col_indices = Vec::new();
             let mut virtual_col_indices = HashSet::new();
             for index in columns.iter() {
+                if ignore_lazy_column && metadata.is_lazy_column(*index) {
+                    continue;
+                }
                 let name = match metadata.column(*index) {
                     ColumnEntry::BaseTableColumn(BaseTableColumn { column_name, .. }) => {
                         column_name
@@ -158,6 +173,9 @@ impl PhysicalPlanBuilder {
         } else {
             let mut col_indices = BTreeMap::new();
             for index in columns.iter() {
+                if ignore_lazy_column && metadata.is_lazy_column(*index) {
+                    continue;
+                }
                 let column = metadata.column(*index);
                 match column {
                     ColumnEntry::BaseTableColumn(BaseTableColumn {
@@ -196,6 +214,80 @@ impl PhysicalPlanBuilder {
         }
     }
 
+    fn try_build_row_fetch_on_limit(
+        &mut self,
+        input_plan: PhysicalPlan,
+        limit: &planner::plans::Limit,
+        stat_info: PlanStatsInfo,
+    ) -> Result<PhysicalPlan> {
+        let next_plan_id = self.next_plan_id();
+        let metadata = self.metadata.read().clone();
+        if metadata.lazy_columns().is_empty() {
+            return Ok(PhysicalPlan::Limit(Limit {
+                plan_id: next_plan_id,
+                input: Box::new(input_plan),
+                limit: limit.limit,
+                offset: limit.offset,
+                stat_info: Some(stat_info),
+            }));
+        }
+        let input_schema = input_plan.output_schema()?;
+
+        // Lazy materialization is enabled.
+        let row_id_col_index = metadata
+            .columns()
+            .iter()
+            .position(|col| col.name() == ROW_ID_COL_NAME)
+            .ok_or_else(|| ErrorCode::Internal("Internal column _row_id is not found"))?;
+        let row_id_col_offset = input_schema.index_of(&row_id_col_index.to_string())?;
+
+        let mut has_inner_column = false;
+        let fetched_fields = metadata
+            .lazy_columns()
+            .iter()
+            .sorted() // Needs sort because we need to make the order deterministic.
+            .map(|index| {
+                let col = metadata.column(*index);
+                if let ColumnEntry::BaseTableColumn(c) = col {
+                    if c.path_indices.is_some() {
+                        has_inner_column = true;
+                    }
+                }
+                DataField::new(&index.to_string(), col.data_type())
+            })
+            .collect();
+
+        let source = input_plan.try_find_single_data_source();
+        debug_assert!(source.is_some());
+        let source_info = source.cloned().unwrap();
+        let table_schema = source_info.source_info.schema();
+        let cols_to_fetch = Self::build_projection(
+            &metadata,
+            &table_schema,
+            metadata.lazy_columns(),
+            has_inner_column,
+            true,
+            true,
+            false,
+        );
+
+        Ok(PhysicalPlan::RowFetch(RowFetch {
+            plan_id: self.next_plan_id(),
+            input: Box::new(PhysicalPlan::Limit(Limit {
+                plan_id: next_plan_id,
+                input: Box::new(input_plan),
+                limit: limit.limit,
+                offset: limit.offset,
+                stat_info: Some(stat_info.clone()),
+            })),
+            source: Box::new(source_info),
+            row_id_col_offset,
+            cols_to_fetch,
+            fetched_fields,
+            stat_info: Some(stat_info),
+        }))
+    }
+
     #[async_recursion::async_recursion]
     #[async_backtrace::framed]
     pub async fn build(&mut self, s_expr: &SExpr) -> Result<PhysicalPlan> {
@@ -211,6 +303,9 @@ impl PhysicalPlanBuilder {
                 let metadata = self.metadata.read().clone();
 
                 for index in scan.columns.iter() {
+                    if metadata.is_lazy_column(*index) {
+                        continue;
+                    }
                     let column = metadata.column(*index);
                     if let ColumnEntry::BaseTableColumn(BaseTableColumn { path_indices, .. }) =
                         column
@@ -239,13 +334,28 @@ impl PhysicalPlanBuilder {
                     }
                 }
 
+                if !metadata.lazy_columns().is_empty() {
+                    // Lazy materilaztion is enabled.
+                    if let Entry::Vacant(entry) = name_mapping.entry(ROW_ID_COL_NAME.to_string()) {
+                        let internal_column = INTERNAL_COLUMN_FACTORY
+                            .get_internal_column(ROW_ID_COL_NAME)
+                            .unwrap();
+                        let index = self
+                            .metadata
+                            .write()
+                            .add_internal_column(scan.table_index, internal_column.clone());
+                        entry.insert(index);
+                        project_internal_columns.insert(index, internal_column);
+                    }
+                }
+
                 let table_entry = metadata.table(scan.table_index);
                 let table = table_entry.table();
                 let mut table_schema = table.schema();
                 if !project_internal_columns.is_empty() {
                     let mut schema = table_schema.as_ref().clone();
                     for internal_column in project_internal_columns.values() {
-                        schema.add_internal_column(
+                        schema.add_internal_field(
                             internal_column.column_name(),
                             internal_column.table_data_type(),
                             internal_column.column_id(),
@@ -508,10 +618,15 @@ impl PhysicalPlanBuilder {
                                     sig: AggregateFunctionSignature {
                                         name: agg.func_name.clone(),
                                         args: agg.args.iter().map(|s| {
-                                            s.data_type()
+                                            if let ScalarExpr::BoundColumnRef(col) = s {
+                                                Ok(input_schema.field_with_name(&col.column.index.to_string())?.data_type().clone())
+                                            } else {
+                                                Err(ErrorCode::Internal(
+                                                    "Aggregate function argument must be a BoundColumnRef".to_string()
+                                                ))
+                                            }
                                         }).collect::<Result<_>>()?,
                                         params: agg.params.clone(),
-                                        return_type: *agg.return_type.clone(),
                                     },
                                     output_column: v.index,
                                     args: agg.args.iter().map(|arg| {
@@ -571,6 +686,10 @@ impl PhysicalPlanBuilder {
                                     }
                                 };
 
+                                let settings = self.ctx.get_settings();
+                                let efficiently_memory =
+                                    settings.get_efficiently_memory_group_by()?;
+
                                 let group_by_key_index =
                                     aggregate_partial.output_schema()?.num_fields() - 1;
                                 let group_by_key_data_type =
@@ -579,6 +698,7 @@ impl PhysicalPlanBuilder {
                                             .iter()
                                             .map(|v| v.scalar.data_type())
                                             .collect::<Result<Vec<_>>>()?,
+                                        efficiently_memory,
                                     )?
                                     .data_type();
 
@@ -649,10 +769,15 @@ impl PhysicalPlanBuilder {
                                     sig: AggregateFunctionSignature {
                                         name: agg.func_name.clone(),
                                         args: agg.args.iter().map(|s| {
-                                            s.data_type()
+                                            if let ScalarExpr::BoundColumnRef(col) = s {
+                                                Ok(input_schema.field_with_name(&col.column.index.to_string())?.data_type().clone())
+                                            } else {
+                                                Err(ErrorCode::Internal(
+                                                    "Aggregate function argument must be a BoundColumnRef".to_string()
+                                                ))
+                                            }
                                         }).collect::<Result<_>>()?,
                                         params: agg.params.clone(),
-                                        return_type: *agg.return_type.clone(),
                                     },
                                     output_column: v.index,
                                     args: agg.args.iter().map(|arg| {
@@ -749,7 +874,6 @@ impl PhysicalPlanBuilder {
                                 name: agg.func_name.clone(),
                                 args: agg.args.iter().map(|s| s.data_type()).collect::<Result<_>>()?,
                                 params: agg.params.clone(),
-                                return_type: *agg.return_type.clone(),
                             },
                             output_column: w.index,
                             args: agg.args.iter().map(|arg| {
@@ -773,6 +897,7 @@ impl PhysicalPlanBuilder {
                     WindowFuncType::RowNumber => WindowFunction::RowNumber,
                     WindowFuncType::Rank => WindowFunction::Rank,
                     WindowFuncType::DenseRank => WindowFunction::DenseRank,
+                    WindowFuncType::PercentRank => WindowFunction::PercentRank,
                 };
 
                 Ok(PhysicalPlan::Window(Window {
@@ -802,14 +927,20 @@ impl PhysicalPlanBuilder {
                 stat_info: Some(stat_info),
             })),
 
-            RelOperator::Limit(limit) => Ok(PhysicalPlan::Limit(Limit {
-                plan_id: self.next_plan_id(),
-                input: Box::new(self.build(s_expr.child(0)?).await?),
-                limit: limit.limit,
-                offset: limit.offset,
-
-                stat_info: Some(stat_info),
-            })),
+            RelOperator::Limit(limit) => {
+                let input_plan = self.build(s_expr.child(0)?).await?;
+                if let PhysicalPlan::Sort(_) = input_plan {
+                    self.try_build_row_fetch_on_limit(input_plan, limit, stat_info)
+                } else {
+                    Ok(PhysicalPlan::Limit(Limit {
+                        plan_id: self.next_plan_id(),
+                        input: Box::new(input_plan),
+                        limit: limit.limit,
+                        offset: limit.offset,
+                        stat_info: Some(stat_info),
+                    }))
+                }
+            }
 
             RelOperator::Exchange(exchange) => {
                 let input = Box::new(self.build(s_expr.child(0)?).await?);
@@ -841,21 +972,115 @@ impl PhysicalPlanBuilder {
             }
 
             RelOperator::UnionAll(op) => {
-                let left = self.build(s_expr.child(0)?).await?;
-                let left_schema = left.output_schema()?;
+                let left_schema = self.build(s_expr.child(0)?).await?.output_schema()?;
+                let right_schema = self.build(s_expr.child(1)?).await?.output_schema()?;
+
+                let common_types = op.pairs.iter().map(|(l, r)| {
+                    let left_field = left_schema.field_with_name(&l.to_string()).unwrap();
+                    let right_field = right_schema.field_with_name(&r.to_string()).unwrap();
+
+                    let common_type = common_super_type(
+                        left_field.data_type().clone(),
+                        right_field.data_type().clone(),
+                        &BUILTIN_FUNCTIONS.default_cast_rules,
+                    );
+                    common_type.ok_or_else(|| {
+                        ErrorCode::SemanticError(format!(
+                            "SetOperation's types cannot be matched, left column {:?}, type: {:?}, right column {:?}, type: {:?}",
+                            left_field.name(),
+                            left_field.data_type(),
+                            right_field.name(),
+                            right_field.data_type()
+                        ))
+                    })
+                }).collect::<Result<Vec<_>>>()?;
+
+                async fn cast_plan(
+                    plan_builder: &mut PhysicalPlanBuilder,
+                    plan: SExpr,
+                    plan_schema: &DataSchema,
+                    indexes: &[IndexType],
+                    common_types: &[DataType],
+                ) -> Result<PhysicalPlan> {
+                    debug_assert!(indexes.len() == common_types.len());
+                    let scalar_items = indexes
+                        .iter()
+                        .map(|index| plan_schema.field_with_name(&index.to_string()).unwrap())
+                        .zip(common_types)
+                        .filter(|(f, common_ty)| f.data_type() != *common_ty)
+                        .map(|(f, common_ty)| {
+                            let cast_expr = wrap_cast(
+                                &ScalarExpr::BoundColumnRef(BoundColumnRef {
+                                    span: None,
+                                    column: ColumnBinding {
+                                        database_name: None,
+                                        table_name: None,
+                                        table_index: None,
+                                        column_name: f.name().clone(),
+                                        index: f.name().parse().unwrap(),
+                                        data_type: Box::new(f.data_type().clone()),
+                                        visibility: Visibility::Visible,
+                                    },
+                                }),
+                                common_ty,
+                            );
+                            ScalarItem {
+                                scalar: cast_expr,
+                                index: f.name().parse().unwrap(),
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let new_plan = if scalar_items.is_empty() {
+                        plan
+                    } else {
+                        SExpr::create_unary(
+                            crate::plans::EvalScalar {
+                                items: scalar_items,
+                            }
+                            .into(),
+                            plan,
+                        )
+                    };
+                    let new_plan = plan_builder.build(&new_plan).await?;
+
+                    Ok(new_plan)
+                }
+
+                let left_indexes = op.pairs.iter().map(|(l, _)| *l).collect::<Vec<_>>();
+                let right_indexes = op.pairs.iter().map(|(_, r)| *r).collect::<Vec<_>>();
+                let left_plan = cast_plan(
+                    self,
+                    s_expr.child(0)?.clone(),
+                    left_schema.as_ref(),
+                    &left_indexes,
+                    &common_types,
+                )
+                .await?;
+                let right_plan = cast_plan(
+                    self,
+                    s_expr.child(1)?.clone(),
+                    right_schema.as_ref(),
+                    &right_indexes,
+                    &common_types,
+                )
+                .await?;
+
                 let pairs = op
                     .pairs
                     .iter()
                     .map(|(l, r)| (l.to_string(), r.to_string()))
                     .collect::<Vec<_>>();
-                let fields = pairs
+                let fields = left_indexes
                     .iter()
-                    .map(|(left, _)| Ok(left_schema.field_with_name(left)?.clone()))
-                    .collect::<Result<Vec<_>>>()?;
+                    .zip(&common_types)
+                    .map(|(index, ty)| DataField::new(&index.to_string(), ty.clone()))
+                    .collect::<Vec<_>>();
+
                 Ok(PhysicalPlan::UnionAll(UnionAll {
                     plan_id: self.next_plan_id(),
-                    left: Box::new(left),
-                    right: Box::new(self.build(s_expr.child(1)?).await?),
+                    left: Box::new(left_plan),
+                    right: Box::new(right_plan),
                     pairs,
                     schema: DataSchemaRefExt::create(fields),
 
@@ -975,6 +1200,7 @@ impl PhysicalPlanBuilder {
             // or else in read_partition when search internal column from table schema will core.
             true,
             true,
+            true,
         );
 
         let output_columns = if has_virtual_column {
@@ -985,35 +1211,49 @@ impl PhysicalPlanBuilder {
                 has_inner_column,
                 true,
                 false,
+                true,
             ))
         } else {
             None
         };
 
+        let mut is_deterministic = true;
         let push_down_filter = scan
             .push_down_predicates
             .as_ref()
             .filter(|p| !p.is_empty())
-            .map(|predicates| -> Result<RemoteExpr<String>> {
-                let predicates: Result<Vec<Expr<String>>> = predicates
-                    .iter()
-                    .map(|p| p.as_expr_with_col_name())
-                    .collect();
+            .map(
+                |predicates: &Vec<ScalarExpr>| -> Result<RemoteExpr<String>> {
+                    let predicates = predicates
+                        .iter()
+                        .map(|p| {
+                            Ok(p.as_expr()?
+                                .project_column_ref(|col| col.column_name.clone()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
-                let predicates = predicates?;
-                let expr = predicates
-                    .into_iter()
-                    .reduce(|lhs, rhs| {
-                        check_function(None, "and_filters", &[], &[lhs, rhs], &BUILTIN_FUNCTIONS)
+                    let expr = predicates
+                        .into_iter()
+                        .reduce(|lhs, rhs| {
+                            check_function(
+                                None,
+                                "and_filters",
+                                &[],
+                                &[lhs, rhs],
+                                &BUILTIN_FUNCTIONS,
+                            )
                             .unwrap()
-                    })
-                    .unwrap();
+                        })
+                        .unwrap();
 
-                let expr = cast_expr_to_non_null_boolean(expr)?;
+                    let expr = cast_expr_to_non_null_boolean(expr)?;
+                    let (expr, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
 
-                let (expr, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
-                Ok(expr.as_remote_expr())
-            })
+                    is_deterministic = expr.is_deterministic(&BUILTIN_FUNCTIONS);
+
+                    Ok(expr.as_remote_expr())
+                },
+            )
             .transpose()?;
 
         let prewhere_info = scan
@@ -1031,15 +1271,17 @@ impl PhysicalPlanBuilder {
                     table_schema,
                     &prewhere.output_columns,
                     has_inner_column,
+                    true,
                     false,
-                    false,
+                    true,
                 );
                 let prewhere_columns = Self::build_projection(
                     &metadata,
                     table_schema,
                     &prewhere.prewhere_columns,
                     has_inner_column,
-                    false,
+                    true,
+                    true,
                     true,
                 );
                 let remain_columns = Self::build_projection(
@@ -1047,7 +1289,8 @@ impl PhysicalPlanBuilder {
                     table_schema,
                     &remain_columns,
                     has_inner_column,
-                    false,
+                    true,
+                    true,
                     true,
                 );
 
@@ -1064,9 +1307,12 @@ impl PhysicalPlanBuilder {
                         })
                     })
                     .expect("there should be at least one predicate in prewhere");
-                let expr = cast_expr_to_non_null_boolean(predicate.as_expr_with_col_name()?)?;
-                let (filter, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
-                let filter = filter.as_remote_expr();
+                let filter = cast_expr_to_non_null_boolean(
+                    predicate
+                        .as_expr()?
+                        .project_column_ref(|col| col.column_name.clone()),
+                )?
+                .as_remote_expr();
                 let virtual_columns = self.build_virtual_columns(&prewhere.prewhere_columns);
 
                 Ok::<PrewhereInfo, ErrorCode>(PrewhereInfo {
@@ -1131,19 +1377,21 @@ impl PhysicalPlanBuilder {
             projection: Some(projection),
             output_columns,
             filter: push_down_filter,
+            is_deterministic,
             prewhere: prewhere_info,
             limit: scan.limit,
             order_by: order_by.unwrap_or_default(),
             virtual_columns,
+            lazy_materialization: !metadata.lazy_columns().is_empty(),
         })
     }
 
     fn build_plan_stat_info(&self, s_expr: &SExpr) -> Result<PlanStatsInfo> {
         let rel_expr = RelExpr::with_s_expr(s_expr);
-        let prop = rel_expr.derive_relational_prop()?;
+        let stat_info = rel_expr.derive_cardinality()?;
 
         Ok(PlanStatsInfo {
-            estimated_rows: prop.cardinality,
+            estimated_rows: stat_info.cardinality,
         })
     }
 }

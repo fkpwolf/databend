@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -61,12 +61,6 @@ impl Interpreter for ReplaceInterpreter {
             .ctx
             .get_table(&plan.catalog, &plan.database, &plan.table)
             .await?;
-
-        if table.get_table_info().meta.default_cluster_key_id.is_some() {
-            return Err(ErrorCode::StorageOther(
-                "replace into table with cluster key definition is not supported yet",
-            ));
-        }
 
         let mut pipeline = self
             .connect_input_source(self.ctx.clone(), &self.plan.source, self.plan.schema())

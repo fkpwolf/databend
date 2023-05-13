@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.#[derive(Clone, Debug)]
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -18,12 +18,11 @@ use common_catalog::table_context::TableContext;
 use common_exception::Result;
 
 use crate::optimizer::ColumnSet;
-use crate::optimizer::ColumnStatSet;
 use crate::optimizer::PhysicalProperty;
 use crate::optimizer::RelExpr;
 use crate::optimizer::RelationalProperty;
 use crate::optimizer::RequiredProperty;
-use crate::optimizer::Statistics;
+use crate::optimizer::StatInfo;
 use crate::plans::Operator;
 use crate::plans::RelOp;
 use crate::plans::ScalarExpr;
@@ -92,30 +91,18 @@ impl Operator for EvalScalar {
         }
         outer_columns = outer_columns.difference(&output_columns).cloned().collect();
 
-        // Derive cardinality
-        let cardinality = input_prop.cardinality;
-        let precise_cardinality = input_prop.statistics.precise_cardinality;
         // Derive used columns
         let mut used_columns = self.used_columns()?;
         used_columns.extend(input_prop.used_columns);
-
-        let mut column_stats: ColumnStatSet = Default::default();
-        for (k, v) in input_prop.statistics.column_stats {
-            if !used_columns.contains(&k) {
-                continue;
-            }
-            column_stats.insert(k as IndexType, v);
-        }
 
         Ok(RelationalProperty {
             output_columns,
             outer_columns,
             used_columns,
-            cardinality,
-            statistics: Statistics {
-                precise_cardinality,
-                column_stats,
-            },
         })
+    }
+
+    fn derive_cardinality(&self, rel_expr: &RelExpr) -> Result<StatInfo> {
+        rel_expr.derive_cardinality_child(0)
     }
 }

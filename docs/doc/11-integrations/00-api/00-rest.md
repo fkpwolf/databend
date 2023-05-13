@@ -28,7 +28,11 @@ This handler return results in `pages` with long-polling.
 ### Quick Example
 
 ```shell
-curl -u root: --request POST '127.0.0.1:8001/v1/query/' --header 'Content-Type: application/json' --data-raw '{"sql": "SELECT avg(number) FROM numbers(100000000)"}'
+curl -u root: \
+  --request POST \
+  '127.0.0.1:8001/v1/query/' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{"sql": "SELECT avg(number) FROM numbers(100000000)"}'
 ```
 
 the SQL will be run with default session and pagination settings, mainly:
@@ -196,7 +200,7 @@ client can config the session in the `session` field
 {
   "sql": "select 1", 
   "session": {
-    "db": "db2",
+    "database": "db2",
     "settings": {
       "max_threads": "1"
     }
@@ -234,7 +238,7 @@ use the `QueryResponse.session_id ` for `QueryRequest.session.id`.
 
 #### client-side session
 
-the handler will return info about changed setting or current db in the  `affect` field,
+The handler will return info about changed setting or current database in the  `affect` field,
 client can remember these changes and put them in the session field in the following requests.
 
 when use client side session,  response will contain `session` field, which is `session` field in request together with the affect applied to it.

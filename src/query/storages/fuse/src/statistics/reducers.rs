@@ -1,16 +1,16 @@
-//  Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -113,6 +113,24 @@ pub fn merge_statistics_mut(l: &mut Statistics, r: &Statistics) -> Result<()> {
     l.index_size += r.index_size;
     l.col_stats = reduce_block_statistics(&[&l.col_stats, &r.col_stats])?;
     Ok(())
+}
+
+// Deduct statistics, only be used for calculate snapshot summary during update/delete/replace.
+pub fn deduct_statistics_mut(l: &mut Statistics, r: &Statistics) {
+    l.row_count -= r.row_count;
+    l.block_count -= r.block_count;
+    l.perfect_block_count -= r.perfect_block_count;
+    l.uncompressed_byte_size -= r.uncompressed_byte_size;
+    l.compressed_byte_size -= r.compressed_byte_size;
+    l.index_size -= r.index_size;
+    for (id, col_stats) in &mut l.col_stats {
+        if let Some(r_col_stats) = r.col_stats.get(id) {
+            // The MinMax of a column cannot be recalculated by the right statistics,
+            // so we skip deduct the MinMax statistics here.
+            col_stats.null_count -= r_col_stats.null_count;
+            col_stats.in_memory_size -= r_col_stats.in_memory_size;
+        }
+    }
 }
 
 pub fn reduce_statistics<T: Borrow<Statistics>>(stats: &[T]) -> Result<Statistics> {

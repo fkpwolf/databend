@@ -1,16 +1,16 @@
-//  Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -67,6 +67,7 @@ use storages_common_table_meta::table::OPT_KEY_SNAPSHOT_LOCATION;
 use storages_common_table_meta::table::OPT_KEY_STORAGE_FORMAT;
 use storages_common_table_meta::table::OPT_KEY_TABLE_COMPRESSION;
 use tracing::error;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::io::MetaReaders;
@@ -251,7 +252,7 @@ impl FuseTable {
     pub async fn read_table_snapshot(&self) -> Result<Option<Arc<TableSnapshot>>> {
         if let Some(loc) = self.snapshot_loc().await? {
             let reader = MetaReaders::table_snapshot_reader(self.get_operator());
-            let ver = self.snapshot_format_version().await?;
+            let ver = self.snapshot_format_version(Some(loc.clone())).await?;
             let params = LoadParams {
                 location: loc,
                 len_hint: None,
@@ -265,8 +266,13 @@ impl FuseTable {
     }
 
     #[async_backtrace::framed]
-    pub async fn snapshot_format_version(&self) -> Result<u64> {
-        match self.snapshot_loc().await? {
+    pub async fn snapshot_format_version(&self, location_opt: Option<String>) -> Result<u64> {
+        let location_opt = if location_opt.is_some() {
+            location_opt
+        } else {
+            self.snapshot_loc().await?
+        };
+        match location_opt {
             Some(loc) => Ok(TableMetaLocationGenerator::snapshot_version(loc.as_str())),
             None => {
                 // No snapshot location here, indicates that there are no data of this table yet
@@ -390,7 +396,7 @@ impl Table for FuseTable {
         let schema = self.schema().as_ref().clone();
 
         let prev = self.read_table_snapshot().await?;
-        let prev_version = self.snapshot_format_version().await?;
+        let prev_version = self.snapshot_format_version(None).await?;
         let prev_timestamp = prev.as_ref().and_then(|v| v.timestamp);
         let prev_snapshot_id = prev.as_ref().map(|v| (v.snapshot_id, prev_version));
         let prev_statistics_location = prev
@@ -441,7 +447,7 @@ impl Table for FuseTable {
         let schema = self.schema().as_ref().clone();
 
         let prev = self.read_table_snapshot().await?;
-        let prev_version = self.snapshot_format_version().await?;
+        let prev_version = self.snapshot_format_version(None).await?;
         let prev_timestamp = prev.as_ref().and_then(|v| v.timestamp);
         let prev_statistics_location = prev
             .as_ref()
@@ -546,8 +552,29 @@ impl Table for FuseTable {
 
     #[tracing::instrument(level = "debug", name = "fuse_table_optimize", skip(self, ctx), fields(ctx.id = ctx.get_id().as_str()))]
     #[async_backtrace::framed]
-    async fn purge(&self, ctx: Arc<dyn TableContext>, keep_last_snapshot: bool) -> Result<()> {
-        self.do_purge(&ctx, keep_last_snapshot).await
+    async fn purge(
+        &self,
+        ctx: Arc<dyn TableContext>,
+        instant: Option<NavigationPoint>,
+        keep_last_snapshot: bool,
+        dry_run_limit: Option<usize>,
+    ) -> Result<Option<Vec<String>>> {
+        match self.navigate_for_purge(&ctx, instant).await {
+            Ok((table, files)) => {
+                table
+                    .do_purge(&ctx, files, keep_last_snapshot, dry_run_limit)
+                    .await
+            }
+            Err(e) if e.code() == ErrorCode::TABLE_HISTORICAL_DATA_NOT_FOUND => {
+                warn!("navigate failed: {:?}", e);
+                if dry_run_limit.is_some() {
+                    Ok(Some(vec![]))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 
     #[tracing::instrument(level = "debug", name = "analyze", skip(self, ctx), fields(ctx.id = ctx.get_id().as_str()))]
@@ -594,13 +621,22 @@ impl Table for FuseTable {
     #[tracing::instrument(level = "debug", name = "fuse_table_navigate_to", skip_all)]
     #[async_backtrace::framed]
     async fn navigate_to(&self, point: &NavigationPoint) -> Result<Arc<dyn Table>> {
+        let snapshot_location = if let Some(loc) = self.snapshot_loc().await? {
+            loc
+        } else {
+            // not an error?
+            return Err(ErrorCode::TableHistoricalDataNotFound(
+                "Empty Table has no historical data",
+            ));
+        };
+
         match point {
-            NavigationPoint::SnapshotID(snapshot_id) => {
-                Ok(self.navigate_to_snapshot(snapshot_id.as_str()).await?)
-            }
-            NavigationPoint::TimePoint(time_point) => {
-                Ok(self.navigate_to_time_point(*time_point).await?)
-            }
+            NavigationPoint::SnapshotID(snapshot_id) => Ok(self
+                .navigate_to_snapshot(snapshot_location, snapshot_id.as_str())
+                .await?),
+            NavigationPoint::TimePoint(time_point) => Ok(self
+                .navigate_to_time_point(snapshot_location, *time_point)
+                .await?),
         }
     }
 
@@ -628,7 +664,7 @@ impl Table for FuseTable {
             .await
     }
 
-    fn get_block_compact_thresholds(&self) -> BlockThresholds {
+    fn get_block_thresholds(&self) -> BlockThresholds {
         let max_rows_per_block =
             self.get_option(FUSE_OPT_KEY_ROW_PER_BLOCK, DEFAULT_BLOCK_MAX_ROWS);
         let min_rows_per_block = (max_rows_per_block as f64 * 0.8) as usize;
@@ -675,6 +711,10 @@ impl Table for FuseTable {
 
     fn support_virtual_columns(&self) -> bool {
         matches!(self.storage_format, FuseStorageFormat::Native)
+    }
+
+    fn support_row_id_column(&self) -> bool {
+        true
     }
 }
 

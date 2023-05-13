@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
+
 // https://github.com/rust-lang/rustfmt/blob/e1ab878ccb24cda1b9e1c48865b375230385fede/build.rs
 
 #![allow(clippy::uninlined_format_args)]
@@ -49,23 +49,18 @@ fn build_proto() -> Result<()> {
     let output = cmd.output()?;
     let version = if output.status.success() {
         let content = String::from_utf8_lossy(&output.stdout);
-        content
-            .trim()
-            .split(' ')
-            .last()
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("protoc --version got unexpected output: {}", content),
-                )
-            })?
-            .parse::<Version>()
-            .map_err(|err| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("protoc --version doesn't return valid version: {:?}", err),
-                )
-            })?
+        let content = content.trim().split(' ').last().ok_or_else(|| {
+            Error::new(
+                ErrorKind::Other,
+                format!("protoc --version got unexpected output: {}", content),
+            )
+        })?;
+        lenient_semver::parse(content).map_err(|err| {
+            Error::new(
+                ErrorKind::Other,
+                format!("protoc --version doesn't return valid version: {:?}", err),
+            )
+        })?
     } else {
         return Err(Error::new(
             ErrorKind::Other,

@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,11 +27,11 @@ use common_base::base::tokio::sync::mpsc::Sender;
 use common_base::base::tokio::sync::oneshot;
 use common_base::base::tokio::sync::oneshot::Receiver as OneRecv;
 use common_base::base::tokio::sync::oneshot::Sender as OneSend;
-use common_base::base::tokio::sync::RwLock;
 use common_base::base::tokio::time::sleep;
 use common_base::containers::ItemManager;
 use common_base::containers::Pool;
 use common_base::containers::TtlHashMap;
+use common_base::future::TimingFutureExt;
 use common_base::runtime::Runtime;
 use common_base::runtime::TrySpawn;
 use common_base::runtime::UnlimitedFuture;
@@ -52,6 +53,7 @@ use common_meta_types::protobuf::RaftRequest;
 use common_meta_types::protobuf::WatchRequest;
 use common_meta_types::protobuf::WatchResponse;
 use common_meta_types::ConnectionError;
+use common_meta_types::GrpcConfig;
 use common_meta_types::InvalidArgument;
 use common_meta_types::MetaClientError;
 use common_meta_types::MetaError;
@@ -254,7 +256,7 @@ impl ClientHandle {
 /// Thus a meta client creates a runtime then spawn a MetaGrpcClientWorker.
 pub struct MetaGrpcClient {
     conn_pool: Pool<MetaChannelManager>,
-    endpoints: RwLock<Vec<String>>,
+    endpoints: Mutex<Vec<String>>,
     username: String,
     password: String,
     current_endpoint: Arc<Mutex<Option<String>>>,
@@ -339,7 +341,7 @@ impl MetaGrpcClient {
 
         let worker = Arc::new(Self {
             conn_pool: Pool::new(mgr, Duration::from_millis(50)),
-            endpoints: RwLock::new(endpoints),
+            endpoints: Mutex::new(endpoints),
             current_endpoint: Arc::new(Mutex::new(None)),
             unhealthy_endpoints: Mutex::new(TtlHashMap::new(unhealth_endpoint_evict_time)),
             auto_sync_interval,
@@ -393,23 +395,38 @@ impl MetaGrpcClient {
 
             let resp = match req {
                 message::Request::Get(r) => {
-                    let resp = self.kv_api(r).await;
+                    let resp = self
+                        .kv_api(r)
+                        .timed_ge(threshold(), info_spent("MetaGrpcClient::kv_api"))
+                        .await;
                     message::Response::Get(resp)
                 }
                 message::Request::MGet(r) => {
-                    let resp = self.kv_api(r).await;
+                    let resp = self
+                        .kv_api(r)
+                        .timed_ge(threshold(), info_spent("MetaGrpcClient::kv_api"))
+                        .await;
                     message::Response::MGet(resp)
                 }
                 message::Request::PrefixList(r) => {
-                    let resp = self.kv_api(r).await;
+                    let resp = self
+                        .kv_api(r)
+                        .timed_ge(threshold(), info_spent("MetaGrpcClient::kv_api"))
+                        .await;
                     message::Response::PrefixList(resp)
                 }
                 message::Request::Upsert(r) => {
-                    let resp = self.kv_api(r).await;
+                    let resp = self
+                        .kv_api(r)
+                        .timed_ge(threshold(), info_spent("MetaGrpcClient::kv_api"))
+                        .await;
                     message::Response::Upsert(resp)
                 }
                 message::Request::Txn(r) => {
-                    let resp = self.transaction(r).await;
+                    let resp = self
+                        .transaction(r)
+                        .timed_ge(threshold(), info_spent("MetaGrpcClient::transaction"))
+                        .await;
                     message::Response::Txn(resp)
                 }
                 message::Request::Watch(r) => {
@@ -425,7 +442,7 @@ impl MetaGrpcClient {
                     message::Response::MakeClient(resp)
                 }
                 message::Request::GetEndpoints(_) => {
-                    let resp = self.get_cached_endpoints().await;
+                    let resp = self.get_cached_endpoints();
                     message::Response::GetEndpoints(Ok(resp))
                 }
                 message::Request::GetClientInfo(_) => {
@@ -499,22 +516,41 @@ impl MetaGrpcClient {
         &self,
     ) -> Result<MetaServiceClient<InterceptedService<Channel, AuthInterceptor>>, MetaClientError>
     {
-        let mut eps = self.get_cached_endpoints().await;
-        debug!("service endpoints: {:?}", eps);
+        let all_endpoints = self.get_cached_endpoints();
+        debug!("meta-service all endpoints: {:?}", all_endpoints);
+        debug_assert!(!all_endpoints.is_empty());
 
-        debug_assert!(!eps.is_empty());
+        // Filter out unhealthy endpoints
+        let endpoints = {
+            let mut endpoints = all_endpoints.clone();
 
-        if eps.len() > 1 {
-            // remove unhealthy endpoints
-            let ues = self.unhealthy_endpoints.lock();
-            eps.retain(|e| !ues.contains_key(e));
-        }
+            let unhealthy = self.unhealthy_endpoints.lock();
+            endpoints.retain(|e| !unhealthy.contains_key(e));
+            endpoints
+        };
 
-        for (addr, is_last) in eps.iter().enumerate().map(|(i, a)| (a, i == eps.len() - 1)) {
+        let endpoints = if endpoints.is_empty() {
+            warn!(
+                "meta-service has no healthy endpoints, force using all(healthy or not) endpoints: {:?}",
+                all_endpoints
+            );
+            all_endpoints.clone()
+        } else {
+            debug!("meta-service healthy endpoints: {:?}", endpoints);
+            endpoints
+        };
+
+        for (addr, is_last) in endpoints
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a, i == endpoints.len() - 1))
+        {
             let channel = self.make_channel(Some(addr)).await;
             match channel {
                 Ok(c) => {
-                    let mut client = MetaServiceClient::new(c.clone());
+                    let mut client = MetaServiceClient::new(c.clone())
+                        .max_decoding_message_size(GrpcConfig::MAX_DECODING_SIZE)
+                        .max_encoding_message_size(GrpcConfig::MAX_ENCODING_SIZE);
 
                     let new_token = Self::handshake(
                         &mut client,
@@ -524,11 +560,15 @@ impl MetaGrpcClient {
                         &self.password,
                     )
                     .await;
+
                     match new_token {
                         Ok(token) => {
-                            return Ok(MetaServiceClient::with_interceptor(c, AuthInterceptor {
-                                token,
-                            }));
+                            let client =
+                                MetaServiceClient::with_interceptor(c, AuthInterceptor { token })
+                                    .max_decoding_message_size(GrpcConfig::MAX_DECODING_SIZE)
+                                    .max_encoding_message_size(GrpcConfig::MAX_ENCODING_SIZE);
+
+                            return Ok(client);
                         }
                         Err(handshake_err) => {
                             warn!("handshake error when make client: {:?}", handshake_err);
@@ -559,9 +599,18 @@ impl MetaGrpcClient {
                 }
             }
         }
-        Err(MetaClientError::ConfigError(AnyError::error(
-            "endpoints is empty",
-        )))
+
+        let conn_err = ConnectionError::new(
+            AnyError::error(format!(
+                "healthy endpoints: {:?}; all endpoints: {:?}",
+                endpoints, all_endpoints
+            )),
+            "no endpoints to connect",
+        );
+
+        Err(MetaClientError::NetworkError(
+            MetaNetworkError::ConnectionError(conn_err),
+        ))
     }
 
     #[tracing::instrument(level = "debug", skip(self), err(Debug))]
@@ -569,7 +618,7 @@ impl MetaGrpcClient {
         let addr = if let Some(addr) = addr {
             addr.clone()
         } else {
-            let eps = self.endpoints.read().await;
+            let eps = self.endpoints.lock();
             eps.first().unwrap().clone()
         };
         let ch = self.conn_pool.get(&addr).await;
@@ -603,8 +652,8 @@ impl MetaGrpcClient {
         Ok(())
     }
 
-    async fn get_cached_endpoints(&self) -> Vec<String> {
-        let eps = self.endpoints.read().await;
+    fn get_cached_endpoints(&self) -> Vec<String> {
+        let eps = self.endpoints.lock();
         (*eps).clone()
     }
 
@@ -626,7 +675,7 @@ impl MetaGrpcClient {
             return Ok(());
         }
 
-        let mut eps = self.endpoints.write().await;
+        let mut eps = self.endpoints.lock();
         *eps = endpoints;
         Ok(())
     }
@@ -851,8 +900,15 @@ impl MetaGrpcClient {
 
         let req = common_tracing::inject_span_to_tonic_request(req);
 
-        let mut client = self.make_client().await?;
-        let result = client.kv_api(req).await;
+        let mut client = self
+            .make_client()
+            .timed_ge(threshold(), info_spent("MetaGrpcClient::make_client-1"))
+            .await?;
+
+        let result = client
+            .kv_api(req)
+            .timed_ge(threshold(), info_spent("client::kv_api-1"))
+            .await;
 
         debug!(reply = debug(&result), "MetaGrpcClient::kv_api reply");
 
@@ -861,7 +917,10 @@ impl MetaGrpcClient {
             Err(s) => {
                 if status_is_retryable(&s) {
                     self.mark_as_unhealthy().await;
-                    let mut client = self.make_client().await?;
+                    let mut client = self
+                        .make_client()
+                        .timed_ge(threshold(), info_spent("MetaGrpcClient::make_client-2"))
+                        .await?;
                     let req: Request<RaftRequest> = read_req.try_into().map_err(|e| {
                         MetaNetworkError::InvalidArgument(InvalidArgument::new(
                             e,
@@ -869,7 +928,11 @@ impl MetaGrpcClient {
                         ))
                     })?;
                     let req = common_tracing::inject_span_to_tonic_request(req);
-                    Ok(client.kv_api(req).await?.into_inner())
+                    Ok(client
+                        .kv_api(req)
+                        .timed_ge(threshold(), info_spent("client::kv_api-2"))
+                        .await?
+                        .into_inner())
                 } else {
                     Err(s)
                 }
@@ -939,5 +1002,19 @@ impl Interceptor for AuthInterceptor {
         let metadata = req.metadata_mut();
         metadata.insert_bin(AUTH_TOKEN_KEY, MetadataValue::from_bytes(&self.token));
         Ok(req)
+    }
+}
+
+fn threshold() -> Duration {
+    Duration::from_millis(300)
+}
+
+fn info_spent(msg: impl Display) -> impl Fn(Duration, Duration) {
+    move |total, busy| {
+        info!(
+            total = ?total,
+            busy = ?busy,
+            "{} spent", msg
+        );
     }
 }

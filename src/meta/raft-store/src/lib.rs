@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,5 +18,6 @@ pub(crate) mod compat07;
 pub mod config;
 pub mod key_spaces;
 pub mod log;
+pub mod ondisk;
 pub mod state;
 pub mod state_machine;

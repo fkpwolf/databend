@@ -1,4 +1,4 @@
-// Copyright 2023 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
 
 pub mod merge_into_operation_meta;
-pub mod mutation_log;
+mod mutation_log;
+
+pub use mutation_log::AppendOperationLogEntry;
+pub use mutation_log::BlockMetaIndex;
+pub use mutation_log::CommitMeta;
+pub use mutation_log::MutationLogEntry;
+pub use mutation_log::MutationLogs;
+pub use mutation_log::Replacement;
+pub use mutation_log::ReplacementLogEntry;

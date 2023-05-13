@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -166,6 +166,7 @@ impl<'a> Evaluator<'a> {
 
             Expr::FunctionCall {
                 span,
+                id,
                 function,
                 args,
                 generics,
@@ -189,12 +190,11 @@ impl<'a> Evaluator<'a> {
                     num_rows: self.input_columns.num_rows(),
                     validity,
                     errors: None,
-                    tz: self.func_ctx.tz,
                     func_ctx: self.func_ctx,
                 };
                 let (_, eval) = function.eval.as_scalar().unwrap();
                 let result = (eval)(cols_ref.as_slice(), &mut ctx);
-                ctx.render_error(*span, &args, &function.signature.name)?;
+                ctx.render_error(*span, id.params(), &args, &function.signature.name)?;
                 Ok(result)
             }
         };
@@ -212,7 +212,8 @@ impl<'a> Evaluator<'a> {
                 assert_eq!(
                     ConstantFolder::fold_with_domain(
                         expr,
-                        self.input_columns
+                        &self
+                            .input_columns
                             .domains()
                             .into_iter()
                             .enumerate()
@@ -222,7 +223,8 @@ impl<'a> Evaluator<'a> {
                     )
                     .1,
                     None,
-                    "domain calculation should not return any domain for expressions that are possible to fail"
+                    "domain calculation should not return any domain for expressions that are possible to fail with err {}",
+                    result.unwrap_err()
                 );
                 RECURSING.store(false, Ordering::SeqCst);
             }
@@ -725,7 +727,7 @@ impl<'a> Evaluator<'a> {
             display_name: String::new(),
         };
 
-        let params = if let DataType::Decimal(ty) = dest_type {
+        let params = if let DataType::Decimal(ty) = dest_type.remove_nullable() {
             vec![ty.precision() as usize, ty.scale() as usize]
         } else {
             vec![]
@@ -881,9 +883,12 @@ impl<'a> Evaluator<'a> {
     /// for each input row, along with the number of rows in each set.
     pub fn run_srf(&self, expr: &Expr) -> Result<Vec<(Value<AnyType>, usize)>> {
         if let Expr::FunctionCall {
+            span,
+            id,
             function,
             args,
             return_type,
+            generics,
             ..
         } = expr
         {
@@ -894,7 +899,15 @@ impl<'a> Evaluator<'a> {
                     .map(|expr| self.run(expr))
                     .collect::<Result<Vec<_>>>()?;
                 let cols_ref = args.iter().map(Value::as_ref).collect::<Vec<_>>();
-                let result = (eval)(&cols_ref, self.input_columns.num_rows());
+                let mut ctx = EvalContext {
+                    generics,
+                    num_rows: self.input_columns.num_rows(),
+                    validity: None,
+                    errors: None,
+                    func_ctx: self.func_ctx,
+                };
+                let result = (eval)(&cols_ref, &mut ctx);
+                ctx.render_error(*span, id.params(), &args, &function.signature.name)?;
                 assert_eq!(result.len(), self.input_columns.num_rows());
                 return Ok(result);
             }
@@ -905,9 +918,12 @@ impl<'a> Evaluator<'a> {
 }
 
 pub struct ConstantFolder<'a, Index: ColumnIndex> {
-    input_domains: HashMap<Index, Domain>,
+    input_domains: &'a HashMap<Index, Domain>,
     func_ctx: &'a FunctionContext,
     fn_registry: &'a FunctionRegistry,
+    /// Set to false to disable constant folding of column references.
+    /// This is useful when the column type is untruestworthy.
+    fold_column: bool,
 }
 
 impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
@@ -917,19 +933,31 @@ impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
         func_ctx: &'a FunctionContext,
         fn_registry: &'a FunctionRegistry,
     ) -> (Expr<Index>, Option<Domain>) {
-        let input_domains = expr
-            .column_refs()
-            .into_iter()
-            .map(|(id, ty)| {
-                let domain = Domain::full(&ty);
-                (id, domain)
-            })
-            .collect();
+        let input_domains = Self::full_input_domains(expr);
 
         let folder = ConstantFolder {
-            input_domains,
+            input_domains: &input_domains,
             func_ctx,
             fn_registry,
+            fold_column: true,
+        };
+
+        folder.fold_to_stable(expr)
+    }
+
+    /// Fold a single expression whose column type is not trustworthy.
+    pub fn fold_with_untrusted_column_type(
+        expr: &Expr<Index>,
+        func_ctx: &'a FunctionContext,
+        fn_registry: &'a FunctionRegistry,
+    ) -> (Expr<Index>, Option<Domain>) {
+        let input_domains = Self::full_input_domains(expr);
+
+        let folder = ConstantFolder {
+            input_domains: &input_domains,
+            func_ctx,
+            fn_registry,
+            fold_column: false,
         };
 
         folder.fold_to_stable(expr)
@@ -939,7 +967,7 @@ impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
     /// domain of the new expression.
     pub fn fold_with_domain(
         expr: &Expr<Index>,
-        input_domains: HashMap<Index, Domain>,
+        input_domains: &'a HashMap<Index, Domain>,
         func_ctx: &'a FunctionContext,
         fn_registry: &'a FunctionRegistry,
     ) -> (Expr<Index>, Option<Domain>) {
@@ -947,9 +975,20 @@ impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
             input_domains,
             func_ctx,
             fn_registry,
+            fold_column: true,
         };
 
         folder.fold_to_stable(expr)
+    }
+
+    fn full_input_domains(expr: &Expr<Index>) -> HashMap<Index, Domain> {
+        expr.column_refs()
+            .into_iter()
+            .map(|(id, ty)| {
+                let domain = Domain::full(&ty);
+                (id, domain)
+            })
+            .collect()
     }
 
     /// Running `fold_once()` for only one time may not reach the simplest form of expression,
@@ -986,7 +1025,7 @@ impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
                 id,
                 data_type,
                 ..
-            } => {
+            } if self.fold_column => {
                 let domain = &self.input_domains[id];
                 let expr = domain
                     .as_singleton()
@@ -998,6 +1037,7 @@ impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
                     .unwrap_or_else(|| expr.clone());
                 (expr, Some(domain.clone()))
             }
+            Expr::ColumnRef { .. } => (expr.clone(), None),
             Expr::Cast {
                 span,
                 is_try,
@@ -1440,7 +1480,7 @@ impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
 
         let (_, output_domain) = ConstantFolder::fold_with_domain(
             &cast_expr,
-            [(0, domain.clone())].into_iter().collect(),
+            &[(0, domain.clone())].into_iter().collect(),
             self.func_ctx,
             self.fn_registry,
         );

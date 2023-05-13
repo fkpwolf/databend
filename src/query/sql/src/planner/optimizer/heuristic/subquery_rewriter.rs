@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -169,7 +169,6 @@ impl SubqueryRewriter {
     ) -> Result<(ScalarExpr, SExpr)> {
         match scalar {
             ScalarExpr::BoundColumnRef(_) => Ok((scalar.clone(), s_expr.clone())),
-            ScalarExpr::BoundInternalColumnRef(_) => Ok((scalar.clone(), s_expr.clone())),
             ScalarExpr::ConstantExpr(_) => Ok((scalar.clone(), s_expr.clone())),
             ScalarExpr::WindowFunction(_) => Ok((scalar.clone(), s_expr.clone())),
             ScalarExpr::AggregateFunction(_) => Ok((scalar.clone(), s_expr.clone())),

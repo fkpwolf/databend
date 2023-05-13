@@ -1,16 +1,16 @@
-//  Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -28,8 +28,6 @@ use common_expression::TableSchema;
 use common_expression::TableSchemaRefExt;
 use storages_common_table_meta::meta::TableSnapshotLite;
 
-use crate::io::ListSnapshotLiteOption;
-use crate::io::SnapshotLiteListExtended;
 use crate::io::SnapshotsIO;
 use crate::io::TableMetaLocationGenerator;
 use crate::sessions::TableContext;
@@ -51,12 +49,9 @@ impl<'a> FuseSnapshot<'a> {
         let snapshot_location = self.table.snapshot_loc().await?;
         let snapshot = self.table.read_table_snapshot().await?;
         if let Some(snapshot_location) = snapshot_location {
-            let snapshot_version = self.table.snapshot_format_version().await?;
-            let snapshots_io = SnapshotsIO::create(
-                self.ctx.clone(),
-                self.table.operator.clone(),
-                snapshot_version,
-            );
+            let snapshot_version =
+                TableMetaLocationGenerator::snapshot_version(snapshot_location.as_str());
+            let snapshots_io = SnapshotsIO::create(self.ctx.clone(), self.table.operator.clone());
             let snapshot_lite = if limit.is_none() {
                 // Use SnapshotsIO::read_snapshot_lites only if limit is None
                 //
@@ -64,14 +59,9 @@ impl<'a> FuseSnapshot<'a> {
                 // account, BEFORE the snapshots are chained, so there might be the case that although
                 // there are more than limited number of snapshots could be chained, the number of
                 // snapshots returned is lesser.
-                let SnapshotLiteListExtended {
-                    chained_snapshot_lites,
-                    ..
-                } = snapshots_io
+                let (chained_snapshot_lites, _) = snapshots_io
                     .read_snapshot_lites_ext(
                         snapshot_location,
-                        None,
-                        &ListSnapshotLiteOption::NeedNotSegments,
                         snapshot.and_then(|s| s.timestamp),
                         &|_| {},
                     )

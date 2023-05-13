@@ -1,16 +1,16 @@
-//  Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::ops::Range;
@@ -35,6 +35,10 @@ pub struct BlockMetaIndex {
     pub segment_idx: usize,
     pub block_idx: usize,
     pub range: Option<Range<usize>>,
+    /// The page size of the block.
+    /// If the block format is parquet, its page size is the rows count of the block.
+    /// If the block format is native, its page size is the rows count of each page. (The rows count of the last page may be smaller than the page size.)
+    pub page_size: usize,
     pub block_id: usize,
     pub block_location: String,
     pub segment_id: usize,
@@ -118,15 +122,15 @@ impl TopNPrunner {
             return Ok(metas);
         };
 
-        let sort_idx = if let Ok(index) = self.schema.index_of(column.as_str()) {
-            index as u32
+        let sort_column_id = if let Ok(index) = self.schema.column_id_of(column.as_str()) {
+            index
         } else {
             return Ok(metas);
         };
 
         // String Type min/max is truncated
         if matches!(
-            self.schema.field(sort_idx as usize).data_type(),
+            self.schema.field_with_name(column)?.data_type(),
             TableDataType::String
         ) {
             return Ok(metas);
@@ -135,10 +139,10 @@ impl TopNPrunner {
         let mut id_stats = metas
             .iter()
             .map(|(id, meta)| {
-                let stat = meta.col_stats.get(&sort_idx).ok_or_else(|| {
+                let stat = meta.col_stats.get(&sort_column_id).ok_or_else(|| {
                     ErrorCode::UnknownException(format!(
                         "Unable to get the colStats by ColumnId: {}",
-                        sort_idx
+                        sort_column_id
                     ))
                 })?;
                 Ok((id.clone(), stat.clone(), meta.clone()))

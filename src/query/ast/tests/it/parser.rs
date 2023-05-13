@@ -18,6 +18,8 @@ use common_ast::display_parser_error;
 use common_ast::parser::expr::*;
 use common_ast::parser::parse_sql;
 use common_ast::parser::query::*;
+use common_ast::parser::quote::quote_ident;
+use common_ast::parser::quote::unquote_ident;
 use common_ast::parser::token::*;
 use common_ast::parser::tokenize_sql;
 use common_ast::rule;
@@ -67,6 +69,8 @@ fn test_statement() {
         r#"show databases format TabSeparatedWithNamesAndTypes;"#,
         r#"show tables"#,
         r#"show tables format TabSeparatedWithNamesAndTypes;"#,
+        r#"describe "name""with""quote";"#,
+        r#"describe "name""""with""""quote";"#,
         r#"show full tables"#,
         r#"show full tables from db"#,
         r#"show full tables from ctl.db"#,
@@ -77,6 +81,7 @@ fn test_statement() {
         r#"show create table a.b;"#,
         r#"show create table a.b format TabSeparatedWithNamesAndTypes;"#,
         r#"explain pipeline select a from b;"#,
+        r#"explain pipeline select a from t1 ignore_result;"#,
         r#"describe a;"#,
         r#"describe a format TabSeparatedWithNamesAndTypes;"#,
         r#"create table a (c decimal(38, 0))"#,
@@ -114,7 +119,9 @@ fn test_statement() {
         r#"DROP table IF EXISTS table1;"#,
         r#"CREATE TABLE t(c1 int null, c2 bigint null, c3 varchar null);"#,
         r#"CREATE TABLE t(c1 int not null, c2 bigint not null, c3 varchar not null);"#,
+        r#"CREATE TABLE t(c1 varbinary);"#,
         r#"CREATE TABLE t(c1 int default 1);"#,
+        r#"create table abc as (select * from xyz limit 10)"#,
         r#"ALTER USER u1 IDENTIFIED BY '123456';"#,
         r#"ALTER USER u1 WITH DEFAULT_ROLE = 'role1';"#,
         r#"ALTER USER u1 WITH DEFAULT_ROLE = 'role1', TENANTSETTING;"#,
@@ -146,6 +153,9 @@ fn test_statement() {
         r#"select * from a where a.a > (select b.a from b);"#,
         r#"select 1 from numbers(1) where ((1 = 1) or 1)"#,
         r#"select * from read_parquet('p1', 'p2', 'p3', prune_page => true, refresh_meta_cache => true);"#,
+        r#"select 'stringwith''quote'''"#,
+        r#"select 'stringwith"doublequote'"#,
+        r#"select '🦈'"#,
         r#"insert into t (c1, c2) values (1, 2), (3, 4);"#,
         r#"insert into table t format json;"#,
         r#"insert into table t select * from t2;"#,
@@ -170,6 +180,9 @@ fn test_statement() {
         r#"ALTER DATABASE IF EXISTS ctl.c RENAME TO a;"#,
         r#"ALTER DATABASE c RENAME TO a;"#,
         r#"ALTER DATABASE ctl.c RENAME TO a;"#,
+        r#"VACUUM TABLE t;"#,
+        r#"VACUUM TABLE t RETAIN 4 HOURS DRY RUN;"#,
+        r#"VACUUM TABLE t RETAIN 40 HOURS;"#,
         r#"CREATE TABLE t (a INT COMMENT 'col comment') COMMENT='table comment';"#,
         r#"GRANT CREATE, CREATE USER ON * TO 'test-grant'@'localhost';"#,
         r#"GRANT SELECT, CREATE ON * TO 'test-grant'@'localhost';"#,
@@ -320,7 +333,8 @@ fn test_statement() {
                     record_delimiter = '\n'
                     skip_header = 1
                 )
-                size_limit=10;"#,
+                size_limit=10
+                disable_variant_check=true;"#,
         // We used to support COPY FROM a quoted at string
         // r#"COPY INTO mytable
         //         FROM '@external_stage/path/to/file.csv'
@@ -337,6 +351,10 @@ fn test_statement() {
         r#"PRESIGN @my_stage"#,
         r#"PRESIGN @my_stage/path/to/dir/"#,
         r#"PRESIGN @my_stage/path/to/file"#,
+        r#"PRESIGN @my_stage/my\ file.csv"#,
+        r#"PRESIGN @my_stage/\"file\".csv"#,
+        r#"PRESIGN @my_stage/\'file\'.csv"#,
+        r#"PRESIGN @my_stage/\\file\\.csv"#,
         r#"PRESIGN DOWNLOAD @my_stage/path/to/file"#,
         r#"PRESIGN UPLOAD @my_stage/path/to/file EXPIRE=7200"#,
         r#"PRESIGN UPLOAD @my_stage/path/to/file EXPIRE=7200 CONTENT_TYPE='application/octet-stream'"#,
@@ -439,6 +457,13 @@ fn test_statement_error() {
         r#"PRESIGN INVALID @my_stage/path/to/file"#,
         r#"SELECT * FROM t GROUP BY GROUPING SETS a, b"#,
         r#"SELECT * FROM t GROUP BY GROUPING SETS ()"#,
+        r#"select * from aa.bb limit 10 order by bb;"#,
+        r#"select * from aa.bb offset 10 order by bb;"#,
+        r#"select * from aa.bb offset 10 limit 1;"#,
+        r#"select * from aa.bb order by a order by b;"#,
+        r#"select * from aa.bb offset 10 offset 20;"#,
+        r#"select * from aa.bb limit 10 limit 20;"#,
+        r#"with a as (select 1) with b as (select 2) select * from aa.bb;"#,
     ];
 
     for case in cases {
@@ -499,6 +524,7 @@ fn test_query() {
         r#"select * from range(1, 2)"#,
         r#"select sum(a) over w from customer window w as (partition by a order by b)"#,
         r#"select a, sum(a) over w, sum(a) over w1, sum(a) over w2 from t1 window w as (partition by a), w2 as (w1 rows current row), w1 as (w order by a) order by a"#,
+        r#"SELECT * FROM ((SELECT * FROM xyu ORDER BY x, y)) AS xyu"#,
     ];
 
     for case in cases {
@@ -518,7 +544,6 @@ fn test_query_error() {
         r#"select * order"#,
         r#"select number + 5 as a, cast(number as float(255))"#,
         r#"select 1 1"#,
-        r#"SELECT * FROM ((SELECT * FROM xyu ORDER BY x, y)) AS xyu"#,
     ];
 
     for case in cases {
@@ -633,5 +658,31 @@ fn test_expr_error() {
 
     for case in cases {
         run_parser!(file, expr, case);
+    }
+}
+
+#[test]
+fn test_quote() {
+    let cases = &[
+        ("a", "a"),
+        ("_", "_"),
+        ("_abc", "_abc"),
+        ("_abc12", "_abc12"),
+        ("_12a", "_12a"),
+        ("12a", "\"12a\""),
+        ("12", "\"12\""),
+        ("🍣", "\"🍣\""),
+        ("価格", "\"価格\""),
+        ("\t", "\"\t\""),
+        ("complex \"string\"", "\"complex \"\"string\"\"\""),
+        ("\"\"\"", "\"\"\"\"\"\"\"\""),
+        ("'''", "\"'''\""),
+        ("name\"with\"quote", "\"name\"\"with\"\"quote\""),
+    ];
+    for (input, want) in cases {
+        let quoted = quote_ident(input, '"', false);
+        assert_eq!(quoted, *want);
+        let unquoted = unquote_ident(&quoted, '"');
+        assert_eq!(unquoted, *input, "unquote({}) got {}", quoted, unquoted);
     }
 }

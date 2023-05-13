@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use common_catalog::plan::PushDownInfo;
 use common_catalog::table::Table;
 use common_catalog::table_context::TableContext;
 use common_exception::Result;
@@ -48,7 +49,11 @@ impl AsyncSystemTable for FunctionsTable {
     }
 
     #[async_backtrace::framed]
-    async fn get_full_data(&self, ctx: Arc<dyn TableContext>) -> Result<DataBlock> {
+    async fn get_full_data(
+        &self,
+        ctx: Arc<dyn TableContext>,
+        _push_downs: Option<PushDownInfo>,
+    ) -> Result<DataBlock> {
         // TODO(andylokandy): add rewritable function names, e.g. database()
         let func_names = BUILTIN_FUNCTIONS.registered_names();
         let aggregate_function_factory = AggregateFunctionFactory::instance();

@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use std::cmp::Ordering;
+use std::fmt;
 use std::fmt::Debug;
 
 use common_exception::Result;
+use common_expression::arithmetics_type::ResultTypeOfUnary;
 
 use crate::optimizer::property::datum::Datum;
 
@@ -23,7 +25,7 @@ pub const DEFAULT_HISTOGRAM_BUCKETS: usize = 100;
 
 /// A histogram is a representation of the distribution of a column.
 ///
-/// We are constructing this in an "Equi-depth" fashion, which means
+/// We are constructing this in an "Equi-height" fashion, which means
 /// every bucket has roughly the same number of rows.
 ///
 /// Real-world data distribution is often skewed,
@@ -248,7 +250,8 @@ impl SampleSet for UniformSampleSet {
             (Datum::Int(min), Datum::Int(max)) => {
                 let min = *min;
                 let max = *max;
-                let bucket_range = (max - min) / num_buckets as i64;
+                // TODO(xudong): better histogram computation.
+                let bucket_range = max.checked_sub(min).ok_or("overflowed")? / num_buckets as i64;
                 let upper_bound = match bucket_index {
                     0 => min,
                     _ if bucket_index == num_buckets - 1 => max,
@@ -272,7 +275,8 @@ impl SampleSet for UniformSampleSet {
             (Datum::Float(min), Datum::Float(max)) => {
                 let min = *min;
                 let max = *max;
-                let bucket_range = (max - min) / num_buckets as f64;
+                // TODO(xudong): better histogram computation.
+                let bucket_range = max.checked_sub(min).ok_or("overflowed")? / num_buckets as f64;
                 let upper_bound = match bucket_index {
                     0 => min,
                     _ if bucket_index == num_buckets - 1 => max,
@@ -281,7 +285,10 @@ impl SampleSet for UniformSampleSet {
                 Ok(Datum::Float(upper_bound))
             }
 
-            _ => Err(format!("Unsupported datum type: {:?}", self.min,)),
+            _ => Err(format!(
+                "Unsupported datum type: {:?}, {:?}",
+                self.min, self.max
+            )),
         }
     }
 }
@@ -291,4 +298,20 @@ pub struct InterleavedBucket {
     pub right_ndv: f64,
     pub left_num_rows: f64,
     pub right_num_rows: f64,
+    pub max_val: f64,
+}
+
+impl fmt::Display for Histogram {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for bucket in &self.buckets {
+            writeln!(
+                f,
+                "{}: {} values, {} distinct values",
+                bucket.upper_bound(),
+                bucket.num_values,
+                bucket.num_distinct
+            )?;
+        }
+        Ok(())
+    }
 }

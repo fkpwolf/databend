@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ impl fmt::Display for Node {
         };
         write!(
             f,
-            "{}= raft: {}, grpc: {}",
+            "id={} raft={} grpc={}",
             self.name, self.endpoint, grpc_addr_display
         )
     }

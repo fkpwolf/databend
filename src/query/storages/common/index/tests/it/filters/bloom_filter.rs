@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,6 +29,7 @@ use common_expression::types::NumberDataType;
 use common_expression::types::StringType;
 use common_expression::BlockEntry;
 use common_expression::Column;
+use common_expression::ConstantFolder;
 use common_expression::DataBlock;
 use common_expression::Expr;
 use common_expression::FromData;
@@ -238,6 +238,7 @@ fn eval_map_index(
     val: Scalar,
     ty: DataType,
 ) -> FilterEvalResult {
+    let func_ctx = FunctionContext::default();
     let get_expr = check_function(
         None,
         "get",
@@ -270,11 +271,11 @@ fn eval_map_index(
         &BUILTIN_FUNCTIONS,
     )
     .unwrap();
+    let (expr, _) = ConstantFolder::fold(&expr, &func_ctx, &BUILTIN_FUNCTIONS);
 
     let point_query_cols = BloomIndex::find_eq_columns(&expr).unwrap();
 
     let mut scalar_map = HashMap::<Scalar, u64>::new();
-    let func_ctx = FunctionContext::default();
     for (_, scalar, ty) in point_query_cols.iter() {
         if !scalar_map.contains_key(scalar) {
             let digest = BloomIndex::calculate_scalar_digest(&func_ctx, scalar, ty).unwrap();

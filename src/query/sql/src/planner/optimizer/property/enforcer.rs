@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ pub fn require_property(
         .iter()
         .map(|child| require_property(ctx.clone(), required, child))
         .collect::<Result<Vec<SExpr>>>()?;
-    let optimized_expr = SExpr::create(s_expr.plan().clone(), optimized_children, None, None);
+    let optimized_expr = SExpr::create(s_expr.plan().clone(), optimized_children, None, None, None);
 
     let rel_expr = RelExpr::with_s_expr(&optimized_expr);
     let mut children = Vec::with_capacity(s_expr.arity());
@@ -47,6 +47,15 @@ pub fn require_property(
             // If the child is join probe side and join type is broadcast join
             // We should wrap the child with Random exchange to make it partition to all nodes
             if index == 0 && required.distribution == Distribution::Broadcast {
+                if optimized_expr
+                    .child(0)?
+                    .children()
+                    .iter()
+                    .any(check_partition)
+                {
+                    children.push(optimized_expr.child(index)?.clone());
+                    continue;
+                }
                 let enforced_child =
                     enforce_property(optimized_expr.child(index)?, &RequiredProperty {
                         distribution: Distribution::Any,
@@ -87,6 +96,7 @@ pub fn require_property(
         children,
         None,
         None,
+        None,
     ))
 }
 
@@ -124,6 +134,20 @@ fn check_merge(s_expr: &SExpr) -> bool {
     }
     for child in s_expr.children() {
         if check_merge(child) {
+            return true;
+        }
+    }
+    false
+}
+
+fn check_partition(s_expr: &SExpr) -> bool {
+    if let RelOperator::Exchange(op) = &s_expr.plan {
+        if matches!(op, Exchange::Random | Exchange::Hash(_)) {
+            return true;
+        }
+    }
+    for child in s_expr.children() {
+        if check_partition(child) {
             return true;
         }
     }

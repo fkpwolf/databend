@@ -1,16 +1,16 @@
-//  Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -22,10 +22,10 @@ use common_pipeline_transforms::processors::transforms::AsyncAccumulatingTransfo
 use storages_common_table_meta::meta::TableSnapshot;
 use tracing::info;
 
+use crate::operations::merge_into::CommitSink;
 use crate::operations::mutation::BlockCompactMutator;
 use crate::operations::mutation::CompactAggregator;
 use crate::operations::mutation::CompactSource;
-use crate::operations::mutation::MutationSink;
 use crate::operations::mutation::SegmentCompactMutator;
 use crate::pipelines::Pipeline;
 use crate::FuseTable;
@@ -105,9 +105,9 @@ impl FuseTable {
     /// The flow of Pipeline is as follows:
     /// +--------------+
     /// |CompactSource1|  ------
-    /// +--------------+        |      +-----------------+      +------------+
-    /// |    ...       |  ...   | ---> |CompactAggregator| ---> |MutationSink|
-    /// +--------------+        |      +-----------------+      +------------+
+    /// +--------------+        |      +-----------------+      +----------+
+    /// |    ...       |  ...   | ---> |CompactAggregator| ---> |CommitSink|
+    /// +--------------+        |      +-----------------+      +----------+
     /// |CompactSourceN|  ------
     /// +--------------+
     #[async_backtrace::framed]
@@ -122,7 +122,7 @@ impl FuseTable {
             return Ok(());
         }
 
-        let thresholds = self.get_block_compact_thresholds();
+        let thresholds = self.get_block_thresholds();
         let schema = self.schema();
         let write_settings = self.get_write_settings();
 
@@ -177,7 +177,7 @@ impl FuseTable {
         })?;
 
         pipeline.add_sink(|input| {
-            MutationSink::try_create(
+            CommitSink::try_create(
                 self,
                 ctx.clone(),
                 mutator.compact_params.base_snapshot.clone(),

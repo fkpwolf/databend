@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -169,7 +169,6 @@ pub fn prune_by_children(scalar: &ScalarExpr, columns: &HashSet<ScalarExpr>) -> 
 
     match scalar {
         ScalarExpr::BoundColumnRef(_) => false,
-        ScalarExpr::BoundInternalColumnRef(_) => false,
         ScalarExpr::ConstantExpr(_) => true,
         ScalarExpr::WindowFunction(scalar) => {
             let flag = match &scalar.func {

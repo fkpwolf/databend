@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,18 +25,22 @@ use crate::optimizer::ColumnStat;
 use crate::optimizer::Datum;
 use crate::optimizer::Distribution;
 use crate::optimizer::Histogram;
+use crate::optimizer::HistogramBucket;
 use crate::optimizer::InterleavedBucket;
 use crate::optimizer::NewStatistic;
 use crate::optimizer::PhysicalProperty;
 use crate::optimizer::RelExpr;
 use crate::optimizer::RelationalProperty;
 use crate::optimizer::RequiredProperty;
+use crate::optimizer::StatInfo;
 use crate::optimizer::Statistics;
 use crate::optimizer::UniformSampleSet;
 use crate::plans::Operator;
 use crate::plans::RelOp;
 use crate::plans::ScalarExpr;
 use crate::IndexType;
+
+const BROADCAST_JOIN_THRESHOLD: f64 = 20.0;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum JoinType {
@@ -172,10 +176,12 @@ impl Join {
 
     fn inner_join_cardinality(
         &self,
-        left_prop: &mut RelationalProperty,
-        right_prop: &mut RelationalProperty,
+        left_cardinality: &mut f64,
+        right_cardinality: &mut f64,
+        left_statistics: &mut Statistics,
+        right_statistics: &mut Statistics,
     ) -> Result<f64> {
-        let mut join_card = left_prop.cardinality * right_prop.cardinality;
+        let mut join_card = *left_cardinality * *right_cardinality;
         for (left_condition, right_condition) in self
             .left_conditions
             .iter()
@@ -189,12 +195,10 @@ impl Join {
             {
                 continue;
             }
-            let left_col_stat = left_prop
-                .statistics
+            let left_col_stat = left_statistics
                 .column_stats
                 .get(left_condition.used_columns().iter().next().unwrap());
-            let right_col_stat = right_prop
-                .statistics
+            let right_col_stat = right_statistics
                 .column_stats
                 .get(right_condition.used_columns().iter().next().unwrap());
             match (left_col_stat, right_col_stat) {
@@ -221,16 +225,16 @@ impl Join {
                         let card = evaluate_by_ndv(
                             left_col_stat,
                             right_col_stat,
-                            left_prop,
-                            right_prop,
+                            *left_cardinality,
+                            *right_cardinality,
                             &mut new_ndv,
                         );
                         if card < join_card {
                             join_card = card;
                         }
                         update_statistic(
-                            left_prop,
-                            right_prop,
+                            left_statistics,
+                            right_statistics,
                             left_condition,
                             right_condition,
                             NewStatistic {
@@ -244,13 +248,19 @@ impl Join {
                     let card = match (&left_col_stat.histogram, &right_col_stat.histogram) {
                         (Some(left_hist), Some(right_hist)) => {
                             // Evaluate join cardinality by histogram.
-                            evaluate_by_histogram(left_hist, right_hist, &mut new_ndv)?
+                            evaluate_by_histogram(
+                                left_hist,
+                                right_hist,
+                                &mut new_ndv,
+                                &new_min,
+                                &new_max,
+                            )?
                         }
                         _ => evaluate_by_ndv(
                             left_col_stat,
                             right_col_stat,
-                            left_prop,
-                            right_prop,
+                            *left_cardinality,
+                            *right_cardinality,
                             &mut new_ndv,
                         ),
                     };
@@ -258,8 +268,8 @@ impl Join {
                         join_card = card;
                     }
                     update_statistic(
-                        left_prop,
-                        right_prop,
+                        left_statistics,
+                        right_statistics,
                         left_condition,
                         right_condition,
                         NewStatistic {
@@ -283,8 +293,8 @@ impl Operator for Join {
     }
 
     fn derive_relational_prop(&self, rel_expr: &RelExpr) -> Result<RelationalProperty> {
-        let mut left_prop = rel_expr.derive_relational_prop_child(0)?;
-        let mut right_prop = rel_expr.derive_relational_prop_child(1)?;
+        let left_prop = rel_expr.derive_relational_prop_child(0)?;
+        let right_prop = rel_expr.derive_relational_prop_child(1)?;
         // Derive output columns
         let mut output_columns = left_prop.output_columns.clone();
         if let Some(mark_index) = self.marker_index {
@@ -312,50 +322,15 @@ impl Operator for Join {
         }
         outer_columns = outer_columns.difference(&output_columns).cloned().collect();
 
-        // Evaluating join cardinality using histograms.
-        // If histogram is None, will evaluate using NDV.
-        let inner_join_cardinality =
-            self.inner_join_cardinality(&mut left_prop, &mut right_prop)?;
-        let cardinality = match self.join_type {
-            JoinType::Inner | JoinType::Cross => inner_join_cardinality,
-            JoinType::Left => f64::max(left_prop.cardinality, inner_join_cardinality),
-            JoinType::Right => f64::max(right_prop.cardinality, inner_join_cardinality),
-            JoinType::Full => {
-                f64::max(left_prop.cardinality, inner_join_cardinality)
-                    + f64::max(right_prop.cardinality, inner_join_cardinality)
-                    - inner_join_cardinality
-            }
-            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::Single => {
-                left_prop.cardinality
-            }
-            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
-                right_prop.cardinality
-            }
-        };
-
         // Derive used columns
         let mut used_columns = self.used_columns()?;
         used_columns.extend(left_prop.used_columns);
         used_columns.extend(right_prop.used_columns);
-        // Derive column statistics
-        let column_stats = if cardinality == 0.0 {
-            HashMap::new()
-        } else {
-            let mut column_stats = HashMap::new();
-            column_stats.extend(left_prop.statistics.column_stats);
-            column_stats.extend(right_prop.statistics.column_stats);
-            column_stats
-        };
 
         Ok(RelationalProperty {
             output_columns,
             outer_columns,
             used_columns,
-            cardinality,
-            statistics: Statistics {
-                precise_cardinality: None,
-                column_stats,
-            },
         })
     }
 
@@ -369,11 +344,63 @@ impl Operator for Join {
             (Distribution::Random, _) => Ok(PhysicalProperty {
                 distribution: build_prop.distribution.clone(),
             }),
+            // If both sides are broadcast, which means broadcast join is enabled, to make sure the current join is broadcast, should return Random.
+            // Then required proper is broadcast, and the join will be broadcast.
+            (Distribution::Broadcast, Distribution::Broadcast) => Ok(PhysicalProperty {
+                distribution: Distribution::Random,
+            }),
             // Otherwise pass through probe side.
             _ => Ok(PhysicalProperty {
                 distribution: probe_prop.distribution.clone(),
             }),
         }
+    }
+
+    fn derive_cardinality(&self, rel_expr: &RelExpr) -> Result<StatInfo> {
+        let left_stat_info = rel_expr.derive_cardinality_child(0)?;
+        let right_stat_info = rel_expr.derive_cardinality_child(1)?;
+        let (mut left_cardinality, mut left_statistics) =
+            (left_stat_info.cardinality, left_stat_info.statistics);
+        let (mut right_cardinality, mut right_statistics) =
+            (right_stat_info.cardinality, right_stat_info.statistics);
+        // Evaluating join cardinality using histograms.
+        // If histogram is None, will evaluate using NDV.
+        let inner_join_cardinality = self.inner_join_cardinality(
+            &mut left_cardinality,
+            &mut right_cardinality,
+            &mut left_statistics,
+            &mut right_statistics,
+        )?;
+        let cardinality = match self.join_type {
+            JoinType::Inner | JoinType::Cross => inner_join_cardinality,
+            JoinType::Left => f64::max(left_cardinality, inner_join_cardinality),
+            JoinType::Right => f64::max(right_cardinality, inner_join_cardinality),
+            JoinType::Full => {
+                f64::max(left_cardinality, inner_join_cardinality)
+                    + f64::max(right_cardinality, inner_join_cardinality)
+                    - inner_join_cardinality
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::Single => {
+                left_cardinality
+            }
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => right_cardinality,
+        };
+        // Derive column statistics
+        let column_stats = if cardinality == 0.0 {
+            HashMap::new()
+        } else {
+            let mut column_stats = HashMap::new();
+            column_stats.extend(left_statistics.column_stats);
+            column_stats.extend(right_statistics.column_stats);
+            column_stats
+        };
+        Ok(StatInfo {
+            cardinality,
+            statistics: Statistics {
+                precise_cardinality: None,
+                column_stats,
+            },
+        })
     }
 
     fn compute_required_prop_child(
@@ -394,6 +421,7 @@ impl Operator for Join {
         {
             // TODO(leiysky): we can enforce redistribution here
             required.distribution = Distribution::Serial;
+            return Ok(required);
         } else if ctx.get_settings().get_prefer_broadcast_join()?
             && !matches!(
                 self.join_type,
@@ -403,11 +431,15 @@ impl Operator for Join {
                     | JoinType::RightSemi
                     | JoinType::RightMark
             )
-            && probe_physical_prop.distribution != Distribution::Broadcast
-            && build_physical_prop.distribution != Distribution::Broadcast
         {
-            required.distribution = Distribution::Broadcast;
-        } else if child_index == 0 {
+            let left_stat_info = rel_expr.derive_cardinality_child(0)?;
+            let right_stat_info = rel_expr.derive_cardinality_child(1)?;
+            if right_stat_info.cardinality * BROADCAST_JOIN_THRESHOLD < left_stat_info.cardinality {
+                required.distribution = Distribution::Broadcast;
+                return Ok(required);
+            }
+        }
+        if child_index == 0 {
             required.distribution = Distribution::Hash(self.left_conditions.clone());
         } else {
             required.distribution = Distribution::Hash(self.right_conditions.clone());
@@ -421,97 +453,117 @@ fn evaluate_by_histogram(
     left_hist: &Histogram,
     right_hist: &Histogram,
     new_ndv: &mut Option<f64>,
+    new_min: &Option<Datum>,
+    new_max: &Option<Datum>,
 ) -> Result<f64> {
     let mut interleaved_buckets = vec![];
     let mut all_ndv = 0.0;
-    for (left_idx, left_bucket) in left_hist.buckets.iter().enumerate() {
-        if left_idx == 0 {
+    // Use new_min/new_max to prune buckets
+    let (left_buckets, right_buckets) = prune_buckets(left_hist, right_hist, new_min, new_max)?;
+
+    for (idx, (left_bucket, right_bucket)) in
+        left_buckets.iter().zip(right_buckets.iter()).enumerate()
+    {
+        if idx == 0 {
             continue;
         }
-        for (right_idx, right_bucket) in right_hist.buckets.iter().enumerate() {
-            if right_idx == 0 {
-                continue;
-            }
-            let left_bucket_min = left_hist.buckets[left_idx - 1].upper_bound().to_double()?;
-            let left_bucket_max = left_bucket.upper_bound().to_double()?;
-            let right_bucket_min = right_hist.buckets[right_idx - 1]
-                .upper_bound()
-                .to_double()?;
-            let right_bucket_max = right_bucket.upper_bound().to_double()?;
-            if left_bucket_min <= right_bucket_max && left_bucket_max >= right_bucket_min {
-                // There are four cases for interleaving
-                // 1. left bucket contains right bucket
-                if right_bucket_min >= left_bucket_min && right_bucket_max <= left_bucket_min {
-                    let percentage =
-                        (right_bucket_max - right_bucket_min) / (left_bucket_max - left_bucket_min);
+        let mut left_num_rows = left_bucket.num_values();
+        let mut right_num_rows = right_bucket.num_values();
+        let mut left_bucket_min = left_buckets[idx - 1].upper_bound().to_double()?;
+        let mut left_bucket_max = left_bucket.upper_bound().to_double()?;
+        let mut right_bucket_min = right_buckets[idx - 1].upper_bound().to_double()?;
+        let mut right_bucket_max = right_bucket.upper_bound().to_double()?;
+        let mut left_ndv = left_bucket.num_distinct();
+        let mut right_ndv = right_bucket.num_distinct();
+
+        // Use new_min/new_max to prune bucket
+        if let Some(new_min) = new_min && let Some(new_max) = new_max {
+            prune_bucket(new_min, new_max, &mut left_bucket_min, &mut left_bucket_max, &mut left_ndv, &mut left_num_rows)?;
+            prune_bucket(new_min, new_max, &mut right_bucket_min, &mut right_bucket_max, &mut right_ndv, &mut right_num_rows)?;
+        }
+
+        if left_bucket_min <= right_bucket_max && left_bucket_max >= right_bucket_min {
+            // There are four cases for interleaving
+            // 1. left bucket contains right bucket
+            // ---left_min---right_min---right_max---left_max---
+            if right_bucket_min >= left_bucket_min && right_bucket_max <= left_bucket_max {
+                let percentage =
+                    (right_bucket_max - right_bucket_min) / (left_bucket_max - left_bucket_min);
+                interleaved_buckets.push(InterleavedBucket {
+                    left_ndv: left_ndv * percentage,
+                    right_ndv,
+                    left_num_rows: left_num_rows * percentage,
+                    right_num_rows,
+                    max_val: right_bucket_max,
+                })
+            } else if left_bucket_min >= right_bucket_min && left_bucket_max <= right_bucket_max {
+                // 2. right bucket contains left bucket
+                // ---right_min---left_min---left_max---right_max---
+                let percentage =
+                    (left_bucket_max - left_bucket_min) / (right_bucket_max - right_bucket_min);
+                interleaved_buckets.push(InterleavedBucket {
+                    left_ndv,
+                    right_ndv: right_ndv * percentage,
+                    left_num_rows,
+                    right_num_rows: right_num_rows * percentage,
+                    max_val: left_bucket_max,
+                })
+            } else if left_bucket_min <= right_bucket_min && left_bucket_max <= right_bucket_max {
+                // 3. left bucket intersects with right bucket on the left
+                // ---left_min---right_min---left_max---right_max---
+                if left_bucket_max == right_bucket_min {
                     interleaved_buckets.push(InterleavedBucket {
-                        left_ndv: left_bucket.num_distinct() * percentage,
-                        right_ndv: right_bucket.num_distinct(),
-                        left_num_rows: left_bucket.num_values() * percentage,
-                        right_num_rows: right_bucket.num_values(),
-                    })
-                } else if left_bucket_min >= right_bucket_min && left_bucket_max <= right_bucket_max
-                {
-                    // 2. right bucket contains left bucket
-                    let percentage =
-                        (left_bucket_max - left_bucket_min) / (right_bucket_max - right_bucket_min);
-                    interleaved_buckets.push(InterleavedBucket {
-                        left_ndv: left_bucket.num_distinct(),
-                        right_ndv: right_bucket.num_distinct() * percentage,
-                        left_num_rows: left_bucket.num_values(),
-                        right_num_rows: right_bucket.num_values() * percentage,
-                    })
-                } else if left_bucket_min <= right_bucket_min && left_bucket_max <= right_bucket_max
-                {
-                    // 3. left bucket intersects with right bucket on the left
-                    if left_bucket_max == right_bucket_min {
-                        interleaved_buckets.push(InterleavedBucket {
-                            left_ndv: 1.0,
-                            right_ndv: 1.0,
-                            left_num_rows: left_bucket.num_values() / left_bucket.num_distinct(),
-                            right_num_rows: right_bucket.num_values() / right_bucket.num_distinct(),
-                        });
-                        continue;
-                    }
-                    let left_percentage =
-                        (left_bucket_max - right_bucket_min) / (left_bucket_max - left_bucket_min);
-                    let right_percentage = (left_bucket_max - right_bucket_min)
-                        / (right_bucket_max - right_bucket_min);
-                    interleaved_buckets.push(InterleavedBucket {
-                        left_ndv: left_bucket.num_distinct() * left_percentage,
-                        right_ndv: right_bucket.num_distinct() * right_percentage,
-                        left_num_rows: left_bucket.num_values() * left_percentage,
-                        right_num_rows: right_bucket.num_values() * right_percentage,
-                    })
-                } else if left_bucket_min >= right_bucket_min && left_bucket_max >= right_bucket_max
-                {
-                    // 4. left bucket intersects with right bucket on the right
-                    if right_bucket_max == left_bucket_min {
-                        interleaved_buckets.push(InterleavedBucket {
-                            left_ndv: 1.0,
-                            right_ndv: 1.0,
-                            left_num_rows: left_bucket.num_values() / left_bucket.num_distinct(),
-                            right_num_rows: right_bucket.num_values() / right_bucket.num_distinct(),
-                        });
-                        continue;
-                    }
-                    let left_percentage =
-                        (right_bucket_max - left_bucket_min) / (left_bucket_max - left_bucket_min);
-                    let right_percentage = (right_bucket_max - left_bucket_min)
-                        / (right_bucket_max - right_bucket_min);
-                    interleaved_buckets.push(InterleavedBucket {
-                        left_ndv: left_bucket.num_distinct() * left_percentage,
-                        right_ndv: right_bucket.num_distinct() * right_percentage,
-                        left_num_rows: left_bucket.num_values() * left_percentage,
-                        right_num_rows: right_bucket.num_values() * right_percentage,
-                    })
+                        left_ndv: 1.0,
+                        right_ndv: 1.0,
+                        left_num_rows: left_num_rows / left_ndv,
+                        right_num_rows: right_num_rows / right_ndv,
+                        max_val: left_bucket_max,
+                    });
+                    continue;
                 }
+                let left_percentage =
+                    (left_bucket_max - right_bucket_min) / (left_bucket_max - left_bucket_min);
+                let right_percentage =
+                    (left_bucket_max - right_bucket_min) / (right_bucket_max - right_bucket_min);
+                interleaved_buckets.push(InterleavedBucket {
+                    left_ndv: left_ndv * left_percentage,
+                    right_ndv: right_ndv * right_percentage,
+                    left_num_rows: left_num_rows * left_percentage,
+                    right_num_rows: right_num_rows * right_percentage,
+                    max_val: left_bucket_max,
+                })
+            } else if left_bucket_min >= right_bucket_min && left_bucket_max >= right_bucket_max {
+                // 4. left bucket intersects with right bucket on the right
+                // ---right_min---left_min---right_max---left_max---
+                if right_bucket_max == left_bucket_min {
+                    interleaved_buckets.push(InterleavedBucket {
+                        left_ndv: 1.0,
+                        right_ndv: 1.0,
+                        left_num_rows: left_num_rows / left_ndv,
+                        right_num_rows: right_num_rows / right_ndv,
+                        max_val: right_bucket_max,
+                    });
+                    continue;
+                }
+                let left_percentage =
+                    (right_bucket_max - left_bucket_min) / (left_bucket_max - left_bucket_min);
+                let right_percentage =
+                    (right_bucket_max - left_bucket_min) / (right_bucket_max - right_bucket_min);
+                interleaved_buckets.push(InterleavedBucket {
+                    left_ndv: left_ndv * left_percentage,
+                    right_ndv: right_ndv * right_percentage,
+                    left_num_rows: left_num_rows * left_percentage,
+                    right_num_rows: right_num_rows * right_percentage,
+                    max_val: right_bucket_max,
+                })
             }
         }
     }
     let mut card = 0.0;
-    for bucket in interleaved_buckets {
-        all_ndv += bucket.left_ndv.min(bucket.right_ndv);
+    for (idx, bucket) in interleaved_buckets.iter().enumerate() {
+        if idx == 0 || bucket.max_val != interleaved_buckets[idx - 1].max_val {
+            all_ndv += bucket.left_ndv.min(bucket.right_ndv);
+        }
         let max_ndv = f64::max(bucket.left_ndv, bucket.right_ndv);
         if max_ndv == 0.0 {
             continue;
@@ -525,8 +577,8 @@ fn evaluate_by_histogram(
 fn evaluate_by_ndv(
     left_stat: &ColumnStat,
     right_stat: &ColumnStat,
-    left_prop: &RelationalProperty,
-    right_prop: &RelationalProperty,
+    left_cardinality: f64,
+    right_cardinality: f64,
     new_ndv: &mut Option<f64>,
 ) -> f64 {
     // Update column ndv
@@ -536,27 +588,21 @@ fn evaluate_by_ndv(
     if max_ndv == 0.0 {
         0.0
     } else {
-        left_prop.cardinality * right_prop.cardinality / max_ndv
+        left_cardinality * right_cardinality / max_ndv
     }
 }
 
 fn update_statistic(
-    left_prop: &mut RelationalProperty,
-    right_prop: &mut RelationalProperty,
+    left_statistics: &mut Statistics,
+    right_statistics: &mut Statistics,
     left_condition: &ScalarExpr,
     right_condition: &ScalarExpr,
     new_stat: NewStatistic,
 ) {
-    let left_col_stat = left_prop
-        .statistics
-        .column_stats
-        .get_mut(left_condition.used_columns().iter().next().unwrap())
-        .unwrap();
-    let right_col_stat = right_prop
-        .statistics
-        .column_stats
-        .get_mut(right_condition.used_columns().iter().next().unwrap())
-        .unwrap();
+    let left_index = *left_condition.used_columns().iter().next().unwrap();
+    let right_index = *right_condition.used_columns().iter().next().unwrap();
+    let left_col_stat = left_statistics.column_stats.get_mut(&left_index).unwrap();
+    let right_col_stat = right_statistics.column_stats.get_mut(&right_index).unwrap();
     if let Some(new_min) = new_stat.min {
         left_col_stat.min = new_min.clone();
         right_col_stat.min = new_min;
@@ -568,5 +614,83 @@ fn update_statistic(
     if let Some(new_ndv) = new_stat.ndv {
         left_col_stat.ndv = new_ndv;
         right_col_stat.ndv = new_ndv;
+        for (idx, left) in left_statistics.column_stats.iter_mut() {
+            if idx == &left_index {
+                continue;
+            }
+            // Other columns' histograms are inaccurate, so make them None
+            left.histogram = None;
+        }
+        for (idx, right) in right_statistics.column_stats.iter_mut() {
+            if idx == &right_index {
+                continue;
+            }
+            right.histogram = None;
+        }
     }
+}
+
+// Prune the buckets that are not in the range of [new_min, new_max]
+fn prune_buckets(
+    left_hist: &Histogram,
+    right_hist: &Histogram,
+    new_min: &Option<Datum>,
+    new_max: &Option<Datum>,
+) -> Result<(Vec<HistogramBucket>, Vec<HistogramBucket>)> {
+    if let Some(new_min) = new_min && let Some(new_max) = new_max {
+        let mut left_buckets = Vec::new();
+        let mut right_buckets = Vec::new();
+        for (idx, bucket) in left_hist.buckets.iter().enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            if left_hist.buckets[idx-1].upper_bound() <= new_max && bucket.upper_bound() > new_min {
+                left_buckets.push(bucket.clone());
+            }
+        }
+        for (idx, bucket) in right_hist.buckets.iter().enumerate() {
+            if idx == 0 {
+                continue;
+            }
+            if right_hist.buckets[idx-1].upper_bound() <= new_max && bucket.upper_bound() > new_min {
+                right_buckets.push(bucket.clone());
+            }
+        }
+        return Ok((left_buckets, right_buckets));
+    }
+    Ok((left_hist.buckets.clone(), right_hist.buckets.clone()))
+}
+
+// Prune the bucket's statistics according to `new_min` and `new_max`.
+fn prune_bucket(
+    new_min: &Datum,
+    new_max: &Datum,
+    bucket_min: &mut f64,
+    bucket_max: &mut f64,
+    bucket_ndv: &mut f64,
+    bucket_num_rows: &mut f64,
+) -> Result<()> {
+    let mut new_min = new_min.to_double()?;
+    let mut new_max = new_max.to_double()?;
+    (new_min, new_max) = if *bucket_min <= new_min && *bucket_max >= new_max {
+        (new_min, new_max)
+    } else if *bucket_min <= new_min && *bucket_max > new_min {
+        (new_min, *bucket_max)
+    } else if *bucket_min < new_max && *bucket_max >= new_max {
+        (*bucket_min, new_max)
+    } else {
+        (*bucket_min, *bucket_max)
+    };
+    if new_max == new_min {
+        *bucket_min = new_min;
+        *bucket_max = new_max;
+        *bucket_ndv = 1.0;
+    } else {
+        *bucket_min = new_min;
+        *bucket_max = new_max;
+        let ratio = (new_max - new_min) / (*bucket_max - *bucket_min);
+        *bucket_ndv *= ratio;
+        *bucket_num_rows *= ratio;
+    }
+    Ok(())
 }

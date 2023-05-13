@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -40,6 +40,7 @@ use common_meta_types::Entry;
 use common_meta_types::EntryPayload;
 use common_meta_types::KVMeta;
 use common_meta_types::LogId;
+use common_meta_types::MatchSeq;
 use common_meta_types::MatchSeqExt;
 use common_meta_types::Node;
 use common_meta_types::NodeId;
@@ -105,7 +106,9 @@ pub struct StateMachine {
     /// - Every other state is store in its own keyspace such as `Nodes`.
     pub sm_tree: SledTree,
 
-    /// subscriber of statemachine data
+    blocking_config: BlockingConfig,
+
+    /// subscriber of state machine data
     pub subscriber: Option<Box<dyn StateMachineSubscriber>>,
 }
 
@@ -131,7 +134,23 @@ impl SerializableSnapshot {
     }
 }
 
+/// Configuration of what operation to block for testing purpose.
+#[derive(Debug, Clone, Default)]
+pub struct BlockingConfig {
+    pub dump_snapshot: Duration,
+    pub serde_snapshot: Duration,
+}
+
 impl StateMachine {
+    /// Return a Arc of the blocking config. It is only used for testing.
+    pub fn blocking_config_mut(&mut self) -> &mut BlockingConfig {
+        &mut self.blocking_config
+    }
+
+    pub fn blocking_config(&self) -> &BlockingConfig {
+        &self.blocking_config
+    }
+
     #[tracing::instrument(level = "debug", skip(config), fields(config_id=%config.config_id, prefix=%config.sled_tree_prefix))]
     pub fn tree_name(config: &RaftConfig, sm_id: u64) -> String {
         config.tree_name(format!("{}/{}", TREE_STATE_MACHINE, sm_id))
@@ -159,6 +178,7 @@ impl StateMachine {
 
         let sm = StateMachine {
             sm_tree,
+            blocking_config: BlockingConfig::default(),
             subscriber: None,
         };
 
@@ -217,6 +237,15 @@ impl StateMachine {
             kvs.push(vec![k.to_vec(), v.to_vec()]);
         }
         let snap = SerializableSnapshot { kvs };
+
+        if cfg!(debug_assertions) {
+            let sl = self.blocking_config().dump_snapshot;
+            if !sl.is_zero() {
+                tracing::warn!("start    build snapshot sleep 1000s");
+                std::thread::sleep(sl);
+                tracing::warn!("finished build snapshot sleep 1000s");
+            }
+        }
 
         Ok((snap, last_applied, last_membership, snapshot_id))
     }
@@ -600,8 +629,17 @@ impl StateMachine {
         resp: &mut TxnReply,
         log_time_ms: u64,
     ) -> Result<(), MetaStorageError> {
-        let (expired, prev, result) =
-            Self::txn_upsert_kv(txn_tree, &UpsertKV::delete(&delete.key), log_time_ms)?;
+        let upsert = UpsertKV::delete(&delete.key);
+
+        // If `delete.match_seq` is `Some`, only delete the record with the exact `seq`.
+        let upsert = if let Some(seq) = delete.match_seq {
+            upsert.with(MatchSeq::Exact(seq))
+        } else {
+            upsert
+        };
+
+        let (expired, prev, result) = Self::txn_upsert_kv(txn_tree, &upsert, log_time_ms)?;
+        let is_deleted = prev.is_some() && result.is_none();
 
         if expired.is_some() {
             txn_tree.push_change(&delete.key, expired, None);
@@ -610,7 +648,7 @@ impl StateMachine {
 
         let del_resp = TxnDeleteResponse {
             key: delete.key.clone(),
-            success: prev.is_some(),
+            success: is_deleted,
             prev_value: if delete.prev_value {
                 prev.map(to_pb_seq_v)
             } else {

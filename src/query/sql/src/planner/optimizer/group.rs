@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ use common_exception::Result;
 
 use crate::optimizer::m_expr::MExpr;
 use crate::optimizer::property::RelationalProperty;
+use crate::optimizer::StatInfo;
 use crate::IndexType;
 
 /// State of a `Group`
@@ -46,15 +47,23 @@ pub struct Group {
     /// Relational property shared by expressions in a same `Group`
     pub relational_prop: RelationalProperty,
 
+    /// Stat info shared by expressions in a same `Group`
+    pub stat_info: StatInfo,
+
     pub state: GroupState,
 }
 
 impl Group {
-    pub fn create(index: IndexType, relational_prop: RelationalProperty) -> Self {
+    pub fn create(
+        index: IndexType,
+        relational_prop: RelationalProperty,
+        stat_info: StatInfo,
+    ) -> Self {
         Group {
             group_index: index,
             m_exprs: vec![],
             relational_prop,
+            stat_info,
             state: GroupState::Init,
         }
     }

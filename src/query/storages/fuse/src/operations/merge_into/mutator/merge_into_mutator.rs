@@ -1,4 +1,4 @@
-// Copyright 2023 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,27 +34,28 @@ use storages_common_cache::LoadParams;
 use storages_common_table_meta::meta::BlockMeta;
 use storages_common_table_meta::meta::ColumnStatistics;
 use storages_common_table_meta::meta::Location;
+use storages_common_table_meta::meta::SegmentInfo;
 use tracing::info;
 
 use crate::io::write_data;
 use crate::io::BlockBuilder;
 use crate::io::BlockReader;
+use crate::io::CompactSegmentInfoReader;
 use crate::io::MetaReaders;
 use crate::io::ReadSettings;
-use crate::io::SegmentInfoReader;
 use crate::io::WriteSettings;
 use crate::operations::merge_into::mutation_meta::merge_into_operation_meta::DeletionByColumn;
 use crate::operations::merge_into::mutation_meta::merge_into_operation_meta::MergeIntoOperation;
 use crate::operations::merge_into::mutation_meta::merge_into_operation_meta::UniqueKeyDigest;
-use crate::operations::merge_into::mutation_meta::mutation_log::BlockMetaIndex;
-use crate::operations::merge_into::mutation_meta::mutation_log::MutationLogEntry;
-use crate::operations::merge_into::mutation_meta::mutation_log::MutationLogs;
-use crate::operations::merge_into::mutation_meta::mutation_log::Replacement;
-use crate::operations::merge_into::mutation_meta::mutation_log::ReplacementLogEntry;
+use crate::operations::merge_into::mutation_meta::BlockMetaIndex;
+use crate::operations::merge_into::mutation_meta::MutationLogEntry;
+use crate::operations::merge_into::mutation_meta::MutationLogs;
+use crate::operations::merge_into::mutation_meta::Replacement;
+use crate::operations::merge_into::mutation_meta::ReplacementLogEntry;
 use crate::operations::merge_into::mutator::deletion_accumulator::DeletionAccumulator;
 use crate::operations::merge_into::OnConflictField;
-use crate::operations::mutation::base_mutator::BlockIndex;
-use crate::operations::mutation::base_mutator::SegmentIndex;
+use crate::operations::mutation::BlockIndex;
+use crate::operations::mutation::SegmentIndex;
 
 // Apply MergeIntoOperations to segments
 pub struct MergeIntoOperationAggregator {
@@ -65,7 +66,7 @@ pub struct MergeIntoOperationAggregator {
     data_accessor: Operator,
     write_settings: WriteSettings,
     read_settings: ReadSettings,
-    segment_reader: SegmentInfoReader,
+    segment_reader: CompactSegmentInfoReader,
     block_builder: BlockBuilder,
 }
 
@@ -126,6 +127,7 @@ impl MergeIntoOperationAggregator {
                     };
                     // for typical configuration, segment cache is enabled, thus after the first loop, we are reading from cache
                     let segment_info = self.segment_reader.read(&load_param).await?;
+                    let segment_info: SegmentInfo = segment_info.as_ref().try_into()?;
 
                     // segment level
                     if self.overlapped(&segment_info.summary.col_stats, columns_min_max) {
@@ -169,7 +171,8 @@ impl MergeIntoOperationAggregator {
                 put_cache: true,
             };
 
-            let segment_info = self.segment_reader.read(&load_param).await?;
+            let compact_segment_info = self.segment_reader.read(&load_param).await?;
+            let segment_info: SegmentInfo = compact_segment_info.as_ref().try_into()?;
 
             for (block_index, keys) in block_deletion {
                 let block_meta = &segment_info.blocks[*block_index];
@@ -275,7 +278,6 @@ impl MergeIntoOperationAggregator {
                 index: BlockMetaIndex {
                     segment_idx: segment_index,
                     block_idx: block_index,
-                    range: None,
                 },
                 op: Replacement::Deleted,
             };
@@ -290,8 +292,15 @@ impl MergeIntoOperationAggregator {
         // serialization and compression is cpu intensive, send them to dedicated thread pool
         // and wait (asyncly, which will NOT block the executor thread)
         let block_builder = self.block_builder.clone();
+        let origin_stats = block_meta.cluster_stats.clone();
         let serialized = GlobalIORuntime::instance()
-            .spawn_blocking(move || block_builder.build(new_block))
+            .spawn_blocking(move || {
+                block_builder.build(new_block, |block, generator| {
+                    let cluster_stats =
+                        generator.gen_with_origin_stats(&block, origin_stats.clone())?;
+                    Ok((cluster_stats, block))
+                })
+            })
             .await?;
 
         // persistent data
@@ -309,7 +318,6 @@ impl MergeIntoOperationAggregator {
             index: BlockMetaIndex {
                 segment_idx: segment_index,
                 block_idx: block_index,
-                range: None,
             },
             op: Replacement::Replaced(Arc::new(new_block_meta)),
         };

@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -270,6 +270,21 @@ impl DataBlock {
             None
         };
         (res, remain)
+    }
+
+    pub fn split_by_rows_no_tail(&self, min_rows_per_block: usize) -> Vec<Self> {
+        let max_rows_per_block = min_rows_per_block * 2;
+        let mut res = vec![];
+        let mut offset = 0;
+        let mut remain_rows = self.num_rows;
+        while remain_rows >= max_rows_per_block {
+            let cut = self.slice(offset..(offset + max_rows_per_block));
+            res.push(cut);
+            offset += min_rows_per_block;
+            remain_rows -= min_rows_per_block;
+        }
+        res.push(self.slice(offset..(offset + remain_rows)));
+        res
     }
 
     #[inline]

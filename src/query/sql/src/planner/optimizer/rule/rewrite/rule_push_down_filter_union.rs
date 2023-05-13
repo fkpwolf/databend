@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -148,9 +148,6 @@ fn replace_column_binding(
                 }));
             }
             Ok(ScalarExpr::BoundColumnRef(column))
-        }
-        ScalarExpr::BoundInternalColumnRef(_) => {
-            unreachable!()
         }
         constant_expr @ ScalarExpr::ConstantExpr(_) => Ok(constant_expr),
         ScalarExpr::WindowFunction(expr) => Ok(ScalarExpr::WindowFunction(WindowFunc {

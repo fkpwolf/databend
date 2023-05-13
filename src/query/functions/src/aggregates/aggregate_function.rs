@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,6 +34,11 @@ pub trait AggregateFunction: fmt::Display + Sync + Send {
     fn return_type(&self) -> Result<DataType>;
 
     fn init_state(&self, place: StateAddr);
+
+    fn is_state(&self) -> bool {
+        false
+    }
+
     fn state_layout(&self) -> Layout;
 
     // accumulate is to accumulate the arrays in batch mode

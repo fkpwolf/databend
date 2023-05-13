@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,9 +34,7 @@ impl<'a> WindowChecker<'a> {
 
     pub fn resolve(&self, scalar: &ScalarExpr) -> Result<ScalarExpr> {
         match scalar {
-            ScalarExpr::BoundColumnRef(_)
-            | ScalarExpr::BoundInternalColumnRef(_)
-            | ScalarExpr::ConstantExpr(_) => Ok(scalar.clone()),
+            ScalarExpr::BoundColumnRef(_) | ScalarExpr::ConstantExpr(_) => Ok(scalar.clone()),
             ScalarExpr::FunctionCall(func) => {
                 let args = func
                     .arguments

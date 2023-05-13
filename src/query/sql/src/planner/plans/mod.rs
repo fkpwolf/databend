@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@ pub mod insert;
 mod join;
 mod kill;
 mod limit;
-mod list;
 mod operator;
 mod pattern;
 mod plan;
@@ -58,7 +57,6 @@ pub use insert::InsertInputSource;
 pub use join::*;
 pub use kill::KillPlan;
 pub use limit::*;
-pub use list::ListPlan;
 pub use operator::*;
 pub use pattern::PatternPlan;
 pub use plan::Plan::*;

@@ -28,13 +28,12 @@ use common_expression::Scalar;
 use common_storage::ColumnNode;
 use common_storage::ColumnNodes;
 use databend_query::storages::fuse::FuseTable;
+use databend_query::test_kits::table_test_fixture::TestFixture;
 use futures::TryStreamExt;
 use storages_common_table_meta::meta;
 use storages_common_table_meta::meta::BlockMeta;
 use storages_common_table_meta::meta::ColumnMeta;
 use storages_common_table_meta::meta::ColumnStatistics;
-
-use crate::storages::fuse::table_test_fixture::TestFixture;
 
 #[test]
 fn test_to_partitions() -> Result<()> {
@@ -132,12 +131,7 @@ fn test_to_partitions() -> Result<()> {
     // kick off
     let push_down = Some(PushDownInfo {
         projection: Some(proj),
-        output_columns: None,
-        filter: None,
-        limit: None,
-        order_by: vec![],
-        prewhere: None,
-        virtual_columns: None,
+        ..Default::default()
     });
 
     let (stats, parts) =
@@ -175,12 +169,7 @@ async fn test_fuse_table_exact_statistic() -> Result<()> {
         let proj = Projection::Columns(vec![]);
         let push_downs = PushDownInfo {
             projection: Some(proj),
-            output_columns: None,
-            filter: None,
-            prewhere: None,
-            limit: None,
-            order_by: vec![],
-            virtual_columns: None,
+            ..Default::default()
         };
         let (stats, parts) = table.read_partitions(ctx.clone(), Some(push_downs)).await?;
         assert_eq!(stats.read_rows, num_blocks * rows_per_block);

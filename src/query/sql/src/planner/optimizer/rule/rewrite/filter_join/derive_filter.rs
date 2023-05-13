@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -118,11 +118,6 @@ fn derive_predicate(
 fn replace_column(scalar: &mut ScalarExpr, col_to_scalar: &HashMap<&IndexType, &ScalarExpr>) {
     match scalar {
         ScalarExpr::BoundColumnRef(column) => {
-            let column_index = column.column.index;
-            // Safe to unwrap
-            *scalar = (*col_to_scalar.get(&column_index).unwrap()).clone();
-        }
-        ScalarExpr::BoundInternalColumnRef(column) => {
             let column_index = column.column.index;
             // Safe to unwrap
             *scalar = (*col_to_scalar.get(&column_index).unwrap()).clone();

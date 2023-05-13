@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ use crate::optimizer::PhysicalProperty;
 use crate::optimizer::RelExpr;
 use crate::optimizer::RelationalProperty;
 use crate::optimizer::RequiredProperty;
+use crate::optimizer::StatInfo;
 use crate::plans::Operator;
 use crate::plans::RelOp;
 
@@ -53,6 +54,12 @@ impl Operator for PatternPlan {
     ) -> common_exception::Result<PhysicalProperty> {
         Err(ErrorCode::Internal(
             "Cannot derive physical property for pattern plan",
+        ))
+    }
+
+    fn derive_cardinality(&self, _rel_expr: &RelExpr) -> common_exception::Result<StatInfo> {
+        Err(ErrorCode::Internal(
+            "Cannot derive cardinality for pattern plan",
         ))
     }
 

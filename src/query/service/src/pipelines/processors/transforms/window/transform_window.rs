@@ -1,4 +1,4 @@
-// Copyright 2023 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -90,6 +90,7 @@ pub struct TransformWindow<T: Number> {
     partition_start: RowPtr,
     partition_end: RowPtr,
     partition_ended: bool,
+    partition_size: usize,
 
     // Frame: [`frame_start`, `frame_end`). `frame_end` is excluded.
     frame_unit: WindowFuncFrameUnits,
@@ -227,6 +228,7 @@ impl<T: Number> TransformWindow<T> {
                 return;
             }
             self.partition_end.row += 1;
+            self.partition_size += 1;
         }
 
         assert_eq!(self.partition_end.row, block_rows);
@@ -471,6 +473,14 @@ impl<T: Number> TransformWindow<T> {
                     self.current_dense_rank as u64,
                 )));
             }
+            WindowFunctionImpl::PercentRank => {
+                let percent = if self.partition_size <= 1 {
+                    0_f64
+                } else {
+                    ((self.current_rank - 1) as f64) / ((self.partition_size - 1) as f64)
+                };
+                builder.push(ScalarRef::Number(NumberScalar::Float64(percent.into())));
+            }
         };
 
         Ok(())
@@ -528,6 +538,7 @@ impl TransformWindow<u64> {
             partition_start: RowPtr::default(),
             partition_end: RowPtr::default(),
             partition_ended: false,
+            partition_size: 0,
             frame_unit: WindowFuncFrameUnits::Rows,
             start_bound,
             end_bound,
@@ -592,6 +603,7 @@ where T: Number + ResultTypeOfUnary
             partition_start: RowPtr::default(),
             partition_end: RowPtr::default(),
             partition_ended: false,
+            partition_size: 0,
             frame_unit: WindowFuncFrameUnits::Range,
             start_bound,
             end_bound,
@@ -734,6 +746,13 @@ where T: Number + ResultTypeOfUnary
         }
     }
 
+    fn compute_on_frame(&mut self) -> Result<()> {
+        match &self.func {
+            WindowFunctionImpl::Aggregate(agg) => self.apply_aggregate(agg),
+            _ => Ok(()),
+        }
+    }
+
     /// When adding a [`DataBlock`], we compute the aggregations to the end.
     ///
     /// For each row in the input block,
@@ -813,9 +832,7 @@ where T: Number + ResultTypeOfUnary
                     }
 
                     // 3.1
-                    if let WindowFunctionImpl::Aggregate(agg) = &self.func {
-                        self.apply_aggregate(agg)?;
-                    }
+                    self.compute_on_frame()?;
                 }
 
                 self.merge_result_of_current_row()?;
@@ -848,6 +865,7 @@ where T: Number + ResultTypeOfUnary
                 self.partition_start = self.partition_end;
                 self.partition_end = self.advance_row(self.partition_end);
                 self.partition_ended = false;
+                self.partition_size = 1;
 
                 // reset frames
                 self.need_check_null_frame = self.if_need_check_null_frame();
@@ -933,8 +951,8 @@ macro_rules! impl_advance_frame_bound_method {
                             .column_at(&self.[<frame_ $bound>], ref_idx)
                             .as_nullable()
                             .unwrap();
-                        let valdity = &col.validity;
-                        if unsafe { !valdity.get_bit_unchecked(self.[<frame_ $bound>].row) } {
+                        let validity = &col.validity;
+                        if unsafe { !validity.get_bit_unchecked(self.[<frame_ $bound>].row) } {
                             // Need to skip null rows.
                             if nulls_first {
                                 // The null rows are at front.

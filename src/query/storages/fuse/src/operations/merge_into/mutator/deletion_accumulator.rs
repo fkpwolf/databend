@@ -1,4 +1,4 @@
-// Copyright 2023 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,15 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::operations::merge_into::mutation_meta::merge_into_operation_meta::UniqueKeyDigest;
-use crate::operations::mutation::base_mutator::BlockIndex;
-use crate::operations::mutation::base_mutator::SegmentIndex;
+use crate::operations::mutation::BlockIndex;
+use crate::operations::mutation::SegmentIndex;
 
 pub type BlockDeletionKeys = HashMap<BlockIndex, HashSet<UniqueKeyDigest>>;
 #[derive(Default)]

@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,7 +43,9 @@ pub enum RaftStateKey {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RaftStateValue {
     NodeId(NodeId),
+
     HardState(Vote),
+
     /// active state machine, previous state machine
     StateMachineId((u64, u64)),
 }

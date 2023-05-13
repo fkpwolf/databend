@@ -1,16 +1,16 @@
-//  Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -31,6 +31,7 @@ use common_pipeline_transforms::processors::transforms::try_create_transform_sor
 use common_pipeline_transforms::processors::transforms::BlockCompactor;
 use common_pipeline_transforms::processors::transforms::TransformCompact;
 use common_pipeline_transforms::processors::transforms::TransformSortPartial;
+use common_sql::evaluator::CompoundBlockOperator;
 use storages_common_table_meta::meta::BlockMeta;
 
 use crate::operations::FuseTableSink;
@@ -80,7 +81,7 @@ impl FuseTable {
             }
         });
 
-        let block_compact_thresholds = self.get_block_compact_thresholds();
+        let block_thresholds = self.get_block_thresholds();
         let avg_depth_threshold = self.get_option(
             FUSE_OPT_KEY_ROW_AVG_DEPTH_THRESHOLD,
             DEFAULT_AVG_DEPTH_THRESHOLD,
@@ -97,7 +98,7 @@ impl FuseTable {
             self.meta_location_generator.clone(),
             snapshot,
             threshold,
-            block_compact_thresholds,
+            block_thresholds,
             blocks_map,
             self.operator.clone(),
         )?;
@@ -140,17 +141,23 @@ impl FuseTable {
         // ReadDataKind to avoid OOM.
         self.do_read_data(ctx.clone(), &plan, pipeline)?;
 
-        let max_page_size = self.get_max_page_size();
+        let cluster_stats_gen =
+            self.get_cluster_stats_gen(ctx.clone(), mutator.level() + 1, block_thresholds)?;
+        let operators = cluster_stats_gen.operators.clone();
+        if !operators.is_empty() {
+            let num_input_columns = self.table_info.schema().fields().len();
+            let func_ctx2 = cluster_stats_gen.func_ctx.clone();
+            pipeline.add_transform(move |input, output| {
+                Ok(ProcessorPtr::create(CompoundBlockOperator::create(
+                    input,
+                    output,
+                    num_input_columns,
+                    func_ctx2.clone(),
+                    operators.clone(),
+                )))
+            })?;
+        }
 
-        let cluster_stats_gen = self.get_cluster_stats_gen(
-            ctx.clone(),
-            max_page_size,
-            pipeline,
-            mutator.level() + 1,
-            block_compact_thresholds,
-        )?;
-
-        let _schema = table_info.schema();
         // sort
         let sort_descs: Vec<SortColumnDescription> = cluster_stats_gen
             .cluster_key_index
@@ -171,6 +178,7 @@ impl FuseTable {
                 sort_descs.clone(),
             )?))
         })?;
+
         let block_size = ctx.get_settings().get_max_block_size()? as usize;
         // construct output fields
         let output_fields: Vec<DataField> = cluster_stats_gen.out_fields.clone();
@@ -193,7 +201,7 @@ impl FuseTable {
             Ok(ProcessorPtr::create(TransformCompact::try_create(
                 transform_input_port,
                 transform_output_port,
-                BlockCompactor::new(block_compact_thresholds, true),
+                BlockCompactor::new(block_thresholds, true),
             )?))
         })?;
 
@@ -205,7 +213,7 @@ impl FuseTable {
                 self.operator.clone(),
                 self.meta_location_generator().clone(),
                 cluster_stats_gen.clone(),
-                block_compact_thresholds,
+                block_thresholds,
                 self.table_info.schema(),
                 None,
             )

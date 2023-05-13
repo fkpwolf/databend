@@ -1,16 +1,16 @@
-//  Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,10 +58,16 @@ impl FuseTable {
     ) -> Result<(PartStatistics, Partitions)> {
         debug!("fuse table do read partitions, push downs:{:?}", push_downs);
         let snapshot = self.read_table_snapshot().await?;
+        let is_lazy = push_downs
+            .as_ref()
+            .map(|p| p.lazy_materialization)
+            .unwrap_or_default();
         match snapshot {
             Some(snapshot) => {
                 let settings = ctx.get_settings();
-                if settings.get_enable_distributed_eval_index()? && !ctx.get_cluster().is_empty() {
+                if (settings.get_enable_distributed_eval_index()? && !ctx.get_cluster().is_empty())
+                    || is_lazy
+                {
                     let mut segments = Vec::with_capacity(snapshot.segments.len());
                     for segment_location in &snapshot.segments {
                         segments.push(FuseLazyPartInfo::create(segment_location.clone()))
@@ -108,7 +114,7 @@ impl FuseTable {
         table_info: TableInfo,
         segments_location: Vec<Location>,
         summary: usize,
-        segment_id_map: Option<HashMap<String, usize>>,
+        segment_id_map: Option<HashMap<Location, usize>>,
     ) -> Result<(PartStatistics, Partitions)> {
         let start = Instant::now();
         info!(
@@ -118,19 +124,27 @@ impl FuseTable {
 
         type CacheItem = (PartStatistics, Partitions);
 
-        let cache_key = format!(
-            "{:x}",
-            Sha256::digest(format!("{:?}_{:?}", segments_location, push_downs))
-        );
+        let derterministic_cache_key =
+            push_downs
+                .as_ref()
+                .filter(|p| p.is_deterministic)
+                .map(|push_downs| {
+                    format!(
+                        "{:x}",
+                        Sha256::digest(format!("{:?}_{:?}", segments_location, push_downs))
+                    )
+                });
 
-        if let Some(cache) = CacheItem::cache() {
-            if let Some(data) = cache.get(&cache_key) {
-                info!(
-                    "prune snapshot block from cache, final block numbers:{}, cost:{}",
-                    data.1.len(),
-                    start.elapsed().as_secs()
-                );
-                return Ok((data.0.clone(), data.1.clone()));
+        if let Some(cache_key) = derterministic_cache_key.as_ref() {
+            if let Some(cache) = CacheItem::cache() {
+                if let Some(data) = cache.get(cache_key) {
+                    info!(
+                        "prune snapshot block from cache, final block numbers:{}, cost:{}",
+                        data.1.len(),
+                        start.elapsed().as_secs()
+                    );
+                    return Ok((data.0.clone(), data.1.clone()));
+                }
             }
         }
 
@@ -173,8 +187,10 @@ impl FuseTable {
             pruning_stats,
         )?;
 
-        if let Some(cache) = CacheItem::cache() {
-            cache.put(cache_key, Arc::new(result.clone()));
+        if let Some(cache_key) = derterministic_cache_key {
+            if let Some(cache) = CacheItem::cache() {
+                cache.put(cache_key, Arc::new(result.clone()));
+            }
         }
         Ok(result)
     }
@@ -408,7 +424,7 @@ impl FuseTable {
         )
     }
 
-    fn projection_part(
+    pub(crate) fn projection_part(
         meta: &BlockMeta,
         block_meta_index: &Option<BlockMetaIndex>,
         column_nodes: &ColumnNodes,
@@ -431,9 +447,9 @@ impl FuseTable {
         let location = meta.location.0.clone();
         let format_version = meta.location.1;
 
-        let sort_min_max = top_k.map(|top_k| {
-            let stat = meta.col_stats.get(&top_k.column_id).unwrap();
-            (stat.min.clone(), stat.max.clone())
+        let sort_min_max = top_k.and_then(|top_k| {
+            let stat = meta.col_stats.get(&top_k.column_id);
+            stat.map(|stat| (stat.min.clone(), stat.max.clone()))
         });
 
         // TODO

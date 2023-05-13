@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ impl PatternExtractor {
                 vec![],
                 Some(m_expr.group_index),
                 Some(memo.group(m_expr.group_index)?.relational_prop.clone()),
+                Some(memo.group(m_expr.group_index)?.stat_info.clone()),
             )]);
         }
 
@@ -92,6 +93,7 @@ impl PatternExtractor {
                 vec![],
                 Some(m_expr.group_index),
                 Some(memo.group(m_expr.group_index)?.relational_prop.clone()),
+                Some(memo.group(m_expr.group_index)?.stat_info.clone()),
             ));
             return Ok(results);
         }
@@ -106,6 +108,7 @@ impl PatternExtractor {
                 children,
                 Some(m_expr.group_index),
                 Some(memo.group(m_expr.group_index)?.relational_prop.clone()),
+                Some(memo.group(m_expr.group_index)?.stat_info.clone()),
             ));
 
             let mut shifted = false;

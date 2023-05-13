@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -155,7 +155,7 @@ pub async fn streaming_load(
                         table_schema,
                         context.get_scan_progress(),
                         false,
-                        to_table.get_block_compact_thresholds(),
+                        to_table.get_block_thresholds(),
                     )
                     .await
                     .map_err(|err| err.display_with_sql(insert_sql))

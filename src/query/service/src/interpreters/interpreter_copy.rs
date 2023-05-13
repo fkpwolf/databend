@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,10 +29,10 @@ use common_expression::DataField;
 use common_expression::DataSchema;
 use common_expression::DataSchemaRef;
 use common_expression::DataSchemaRefExt;
+use common_expression::TableSchemaRef;
 use common_meta_app::principal::StageInfo;
 use common_meta_app::schema::TableCopiedFileInfo;
 use common_meta_app::schema::UpsertTableCopiedFileReq;
-use common_meta_types::MetaId;
 use common_pipeline_core::processors::processor::ProcessorPtr;
 use common_sql::executor::table_read_plan::ToReadDataSourcePlan;
 use common_storage::StageFileInfo;
@@ -47,6 +48,7 @@ use crate::interpreters::SelectInterpreter;
 use crate::pipelines::processors::transforms::TransformRuntimeCastSchema;
 use crate::pipelines::processors::TransformCastSchema;
 use crate::pipelines::processors::TransformLimit;
+use crate::pipelines::processors::TransformResortAddOn;
 use crate::pipelines::PipelineBuildResult;
 use crate::sessions::QueryContext;
 use crate::sessions::TableContext;
@@ -171,6 +173,7 @@ impl CopyInterpreter {
         query: &Plan,
         stage_info: StageInfo,
         need_copy_file_infos: Vec<StageFileInfo>,
+        schema: &Option<TableSchemaRef>,
         force: bool,
     ) -> Result<PipelineBuildResult> {
         let start = Instant::now();
@@ -180,8 +183,14 @@ impl CopyInterpreter {
             .get_table(catalog_name, database_name, table_name)
             .await?;
 
-        let dst_schema = Arc::new(to_table.schema().into());
-        if source_schema != dst_schema {
+        let dst_schema: DataSchemaRef = Arc::new(to_table.schema().into());
+        let required_source_schema = if let Some(schema) = schema {
+            Arc::new(schema.into())
+        } else {
+            dst_schema.clone()
+        };
+
+        if source_schema != required_source_schema {
             let func_ctx = ctx.get_function_context()?;
             build_res.main_pipeline.add_transform(
                 |transform_input_port, transform_output_port| {
@@ -191,6 +200,19 @@ impl CopyInterpreter {
                         source_schema.clone(),
                         dst_schema.clone(),
                         func_ctx.clone(),
+                    )
+                },
+            )?;
+        }
+        if required_source_schema != dst_schema {
+            build_res.main_pipeline.add_transform(
+                |transform_input_port, transform_output_port| {
+                    TransformResortAddOn::try_create(
+                        ctx.clone(),
+                        transform_input_port,
+                        transform_output_port,
+                        required_source_schema.clone(),
+                        to_table.clone(),
                     )
                 },
             )?;
@@ -205,22 +227,29 @@ impl CopyInterpreter {
         )?;
 
         build_res.main_pipeline.set_on_finished(move |may_error| {
-            if may_error.is_none() {
-                CopyInterpreter::commit_copy_into_table(
-                    ctx.clone(),
-                    to_table,
-                    stage_info,
-                    need_copy_file_infos,
-                    force,
-                )?;
-                // Status.
-                {
-                    info!("all copy finished, elapsed:{}", start.elapsed().as_secs());
+            match may_error {
+                None => {
+                    CopyInterpreter::commit_copy_into_table(
+                        ctx.clone(),
+                        to_table,
+                        stage_info,
+                        need_copy_file_infos,
+                        force,
+                    )?;
+                    // Status.
+                    {
+                        info!("all copy finished, elapsed:{}", start.elapsed().as_secs());
+                    }
                 }
-                Ok(())
-            } else {
-                Err(may_error.as_ref().unwrap().clone())
+                Some(error) => {
+                    error!(
+                        "copy failed, elapsed:{}, reason: {}",
+                        start.elapsed().as_secs(),
+                        error
+                    );
+                }
             }
+            Ok(())
         });
 
         Ok(build_res)
@@ -333,7 +362,7 @@ impl CopyInterpreter {
         let to_table = ctx
             .get_table(catalog_name, database_name, table_name)
             .await?;
-        stage_table.set_block_compact_thresholds(to_table.get_block_compact_thresholds());
+        stage_table.set_block_thresholds(to_table.get_block_thresholds());
         stage_table.read_data(table_ctx, &read_source_plan, &mut build_res.main_pipeline)?;
 
         // Build Limit pipeline.
@@ -372,6 +401,20 @@ impl CopyInterpreter {
             )?;
         }
 
+        if stage_table_info.schema != to_table.schema() {
+            build_res.main_pipeline.add_transform(
+                |transform_input_port, transform_output_port| {
+                    TransformResortAddOn::try_create(
+                        ctx.clone(),
+                        transform_input_port,
+                        transform_output_port,
+                        Arc::new(stage_table_info.schema.clone().into()),
+                        to_table.clone(),
+                    )
+                },
+            )?;
+        }
+
         // Build append data pipeline.
         to_table.append_data(
             ctx.clone(),
@@ -382,22 +425,29 @@ impl CopyInterpreter {
 
         let stage_table_info_clone = stage_table_info.clone();
         build_res.main_pipeline.set_on_finished(move |may_error| {
-            if may_error.is_none() {
-                CopyInterpreter::commit_copy_into_table(
-                    ctx.clone(),
-                    to_table,
-                    stage_table_info_clone.stage_info,
-                    need_copy_file_infos,
-                    force,
-                )?;
-                // Status.
-                {
-                    info!("all copy finished, elapsed:{}", start.elapsed().as_secs());
+            match may_error {
+                None => {
+                    CopyInterpreter::commit_copy_into_table(
+                        ctx.clone(),
+                        to_table,
+                        stage_table_info_clone.stage_info,
+                        need_copy_file_infos,
+                        force,
+                    )?;
+                    // Status.
+                    {
+                        info!("all copy finished, elapsed:{}", start.elapsed().as_secs());
+                    }
                 }
-                Ok(())
-            } else {
-                Err(may_error.as_ref().unwrap().clone())
+                Some(error) => {
+                    error!(
+                        "copy failed, elapsed:{}, reason: {}",
+                        start.elapsed().as_secs(),
+                        error
+                    );
+                }
             }
+            Ok(())
         });
 
         Ok(build_res)
@@ -435,7 +485,6 @@ impl CopyInterpreter {
             // 1. Commit data to table.
             let operations = ctx.consume_precommit_blocks();
 
-            let table_id = to_table.get_id();
             let expire_hours = ctx.get_settings().get_load_file_metadata_expire_hours()?;
 
             let upsert_copied_files_request = {
@@ -447,7 +496,6 @@ impl CopyInterpreter {
                 } else {
                     let fail_if_duplicated = !force;
                     Self::upsert_copied_files_request(
-                        table_id,
                         expire_hours,
                         copied_file_tree,
                         fail_if_duplicated,
@@ -513,7 +561,6 @@ impl CopyInterpreter {
     }
 
     fn upsert_copied_files_request(
-        table_id: MetaId,
         expire_hours: u64,
         copy_stage_files: BTreeMap<String, TableCopiedFileInfo>,
         fail_if_duplicated: bool,
@@ -522,9 +569,8 @@ impl CopyInterpreter {
             return None;
         }
         tracing::debug!("upsert_copied_files_info: {:?}", copy_stage_files);
-        let expire_at = expire_hours * 60 + Utc::now().timestamp() as u64;
+        let expire_at = expire_hours * 60 * 60 + Utc::now().timestamp() as u64;
         let req = UpsertTableCopiedFileReq {
-            table_id,
             file_info: copy_stage_files,
             expire_at: Some(expire_at),
             fail_if_duplicated,
@@ -573,6 +619,7 @@ impl Interpreter for CopyInterpreter {
                 stage_info,
                 from,
                 need_copy_file_infos,
+                schema,
                 force,
                 ..
             } => {
@@ -583,6 +630,7 @@ impl Interpreter for CopyInterpreter {
                     from,
                     *stage_info.clone(),
                     need_copy_file_infos.clone(),
+                    schema,
                     *force,
                 )
                 .await
@@ -590,6 +638,7 @@ impl Interpreter for CopyInterpreter {
             CopyPlan::IntoStage {
                 stage, from, path, ..
             } => self.build_copy_into_stage_pipeline(stage, path, from).await,
+            CopyPlan::NoFileToCopy => Ok(PipelineBuildResult::create()),
         }
     }
 }

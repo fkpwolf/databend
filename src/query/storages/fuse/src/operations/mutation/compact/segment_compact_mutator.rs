@@ -1,16 +1,16 @@
-//  Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,8 +36,6 @@ use crate::TableMutator;
 
 #[derive(Default)]
 pub struct SegmentCompactionState {
-    // summarised statistics of all the accumulated segments(compacted, and unchanged)
-    pub statistics: Statistics,
     // locations of all the segments(compacted, and unchanged)
     pub segments_locations: Vec<Location>,
     // paths of all the newly created segments (which are compacted), need this to rollback the compaction
@@ -134,13 +132,15 @@ impl TableMutator for SegmentCompactMutator {
             ..Default::default()
         };
 
+        // summary of snapshot is unchanged for compact segments.
+        let statistics = self.compact_params.base_snapshot.summary.clone();
         let fuse_table = FuseTable::try_from_table(table.as_ref())?;
         fuse_table
             .commit_mutation(
                 &self.ctx,
                 self.compact_params.base_snapshot,
                 self.compaction.segments_locations,
-                self.compaction.statistics,
+                statistics,
                 abort_action,
             )
             .await
@@ -251,32 +251,9 @@ impl<'a> SegmentCompactor<'a> {
         if fragments_compacted {
             // if some compaction occurred, the reminders
             // which are outside of the limit should also be collected
-            let start_pos = checked_end_at;
-            for chunk in reverse_locations[start_pos..].chunks(chunk_size) {
-                let segment_infos = segments_io
-                    .read_segments(chunk, false)
-                    .await?
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()?;
-
-                for (segment, location) in segment_infos.into_iter().zip(chunk.iter()) {
-                    compaction.segments_locations.push(location.clone());
-                    merge_statistics_mut(&mut compaction.statistics, &segment.summary)?;
-                }
-
-                checked_end_at += chunk.len();
-                // Status.
-                {
-                    let status = format!(
-                        "compact segment: read segment files:{}/{}, cost:{} sec",
-                        checked_end_at,
-                        number_segments,
-                        start.elapsed().as_secs()
-                    );
-                    info!(status);
-                    (status_callback)(status);
-                }
-            }
+            compaction
+                .segments_locations
+                .extend(reverse_locations[checked_end_at..].iter().cloned());
         }
         // reverse the segments back
         compaction.segments_locations.reverse();
@@ -309,8 +286,6 @@ impl<'a> SegmentCompactor<'a> {
             // lesser than threshold. this happens if the size of segment BEFORE compaction
             // is already larger than threshold.
             self.compact_fragments().await?;
-            // after compaction the fragments, keep this segment as it is
-            merge_statistics_mut(&mut self.compacted_state.statistics, &segment_info.summary)?;
             self.compacted_state.segments_locations.push(location);
         }
 
@@ -330,11 +305,9 @@ impl<'a> SegmentCompactor<'a> {
         // check if only one fragment left
         if fragments.len() == 1 {
             // if only one segment there, keep it as it is
-            let (segment, location) = &fragments[0];
-            merge_statistics_mut(&mut self.compacted_state.statistics, &segment.summary)?;
             self.compacted_state
                 .segments_locations
-                .push(location.clone());
+                .push(fragments[0].1.clone());
             return Ok(());
         }
 
@@ -348,8 +321,6 @@ impl<'a> SegmentCompactor<'a> {
             merge_statistics_mut(&mut new_statistics, &segment.summary)?;
             blocks.append(&mut segment.blocks.clone());
         }
-
-        merge_statistics_mut(&mut self.compacted_state.statistics, &new_statistics)?;
 
         // 2.2 write down new segment
         let new_segment = SegmentInfo::new(blocks, new_statistics);

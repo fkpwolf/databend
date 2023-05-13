@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -94,22 +94,6 @@ pub fn format_scalar(_metadata: &MetadataRef, scalar: &ScalarExpr) -> String {
                 format!(
                     "{} (#{})",
                     column_ref.column.column_name, column_ref.column.index
-                )
-            }
-        }
-        ScalarExpr::BoundInternalColumnRef(column_ref) => {
-            if let Some(table_name) = &column_ref.column.table_name {
-                format!(
-                    "{}.{} (#{})",
-                    table_name,
-                    column_ref.column.internal_column.column_name(),
-                    column_ref.column.index
-                )
-            } else {
-                format!(
-                    "{} (#{})",
-                    column_ref.column.internal_column.column_name(),
-                    column_ref.column.index
                 )
             }
         }

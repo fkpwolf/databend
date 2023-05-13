@@ -1,4 +1,4 @@
-// Copyright 2023 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -199,6 +199,7 @@ impl Rule for RuleLeftExchangeJoin {
                 SExpr::create_binary(join_4.into(), t1.clone(), t3.clone()),
                 t2.clone(),
             ],
+            None,
             None,
             None,
         );

@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ mod session_type;
 pub use common_catalog::table_context::TableContext;
 pub use query_affect::QueryAffect;
 pub use query_ctx::QueryContext;
+pub use query_ctx_shared::short_sql;
 pub use query_ctx_shared::QueryContextShared;
 pub use session::Session;
 pub use session_ctx::SessionContext;

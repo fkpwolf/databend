@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ impl JoinRelation {
 
     pub fn cardinality(&self) -> Result<f64> {
         let rel_expr = RelExpr::with_s_expr(&self.s_expr);
-        Ok(rel_expr.derive_relational_prop()?.cardinality)
+        Ok(rel_expr.derive_cardinality()?.cardinality)
     }
 }
 

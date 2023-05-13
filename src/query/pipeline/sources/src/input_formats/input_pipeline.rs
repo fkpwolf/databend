@@ -1,16 +1,16 @@
-//  Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -193,7 +193,6 @@ pub trait InputFormatPipe: Sized + Send + 'static {
 
     fn execute_copy_aligned(ctx: Arc<InputContext>, pipeline: &mut Pipeline) -> Result<()> {
         let (data_tx, data_rx) = async_channel::bounded(1);
-        Self::build_pipeline_aligned(&ctx, data_rx, pipeline)?;
         let max_storage_io_requests = ctx.settings.get_max_storage_io_requests()?;
         let per_split_io = ctx.schema.fields().len();
         let max_splits = max_storage_io_requests as usize / per_split_io;
@@ -215,6 +214,7 @@ pub trait InputFormatPipe: Sized + Send + 'static {
             "copy read {max_splits} splits in parallel, according to max_memory={max_memory}, num_fields={per_split_io}, max_storage_io_requests={max_storage_io_requests}, max_split_size={}",
             sizes[0]
         );
+        Self::build_pipeline_aligned(&ctx, data_rx, pipeline, max_splits)?;
         let splits = ctx.splits.to_vec();
         let splits = Arc::new(Mutex::new(splits));
         for _ in 0..max_splits {
@@ -252,11 +252,11 @@ pub trait InputFormatPipe: Sized + Send + 'static {
         ctx: &Arc<InputContext>,
         row_batch_rx: async_channel::Receiver<Result<Self::RowBatch>>,
         pipeline: &mut Pipeline,
+        num_threads: usize,
     ) -> Result<()> {
-        let max_threads = ctx.settings.get_max_threads()? as usize;
         pipeline.add_source(
             |output| DeserializeSource::<Self>::create(ctx.clone(), output, row_batch_rx.clone()),
-            max_threads,
+            num_threads,
         )?;
         Ok(())
     }

@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -115,6 +115,11 @@ pub trait Table: Sync + Send {
         false
     }
 
+    /// Whether the table engine supports virtual column `_row_id`.
+    fn support_row_id_column(&self) -> bool {
+        false
+    }
+
     #[async_backtrace::framed]
     async fn alter_table_cluster_keys(
         &self,
@@ -227,10 +232,16 @@ pub trait Table: Sync + Send {
     }
 
     #[async_backtrace::framed]
-    async fn purge(&self, ctx: Arc<dyn TableContext>, keep_last_snapshot: bool) -> Result<()> {
-        let (_, _) = (ctx, keep_last_snapshot);
+    async fn purge(
+        &self,
+        ctx: Arc<dyn TableContext>,
+        instant: Option<NavigationPoint>,
+        keep_last_snapshot: bool,
+        dry_run_limit: Option<usize>,
+    ) -> Result<Option<Vec<String>>> {
+        let (_, _, _, _) = (ctx, instant, keep_last_snapshot, dry_run_limit);
 
-        Ok(())
+        Ok(None)
     }
 
     #[async_backtrace::framed]
@@ -295,7 +306,7 @@ pub trait Table: Sync + Send {
         )))
     }
 
-    fn get_block_compact_thresholds(&self) -> BlockThresholds {
+    fn get_block_thresholds(&self) -> BlockThresholds {
         BlockThresholds {
             max_rows_per_block: DEFAULT_BLOCK_MAX_ROWS,
             min_rows_per_block: DEFAULT_BLOCK_MIN_ROWS,
@@ -303,7 +314,7 @@ pub trait Table: Sync + Send {
         }
     }
 
-    fn set_block_compact_thresholds(&self, _thresholds: BlockThresholds) {
+    fn set_block_thresholds(&self, _thresholds: BlockThresholds) {
         unimplemented!()
     }
 
@@ -353,6 +364,10 @@ pub trait Table: Sync + Send {
             self.name(),
             self.get_table_info().engine(),
         )))
+    }
+
+    fn is_stage_table(&self) -> bool {
+        false
     }
 }
 

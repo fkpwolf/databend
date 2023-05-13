@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,8 +38,10 @@ pub async fn export_meta(addr: &str, save: String) -> anyhow::Result<()> {
     let mut stream = exported.into_inner();
 
     let file: Option<File> = if !save.is_empty() {
+        eprintln!("    To:   File: {}", save);
         Some(File::create(&save)?)
     } else {
+        eprintln!("    To:   <stdout>");
         None
     };
 

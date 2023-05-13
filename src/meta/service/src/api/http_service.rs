@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -61,6 +61,14 @@ impl HttpService {
             .at(
                 "/v1/ctrl/trigger_snapshot",
                 get(super::http::v1::ctrl::trigger_snapshot),
+            )
+            .at(
+                "/v1/ctrl/block_dump_snapshot",
+                get(super::http::v1::ctrl::block_dump_snapshot),
+            )
+            .at(
+                "/v1/ctrl/block_serde_snapshot",
+                get(super::http::v1::ctrl::block_serde_snapshot),
             )
             .at(
                 "/v1/cluster/nodes",

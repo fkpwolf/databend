@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,11 +33,8 @@ use common_meta_client::reply_to_api_result;
 use common_meta_raft_store::config::RaftConfig;
 use common_meta_raft_store::key_spaces::GenericKV;
 use common_meta_sled_store::openraft;
+use common_meta_sled_store::openraft::storage::Adaptor;
 use common_meta_sled_store::openraft::ChangeMembers;
-#[cfg(feature = "raft-store-defensive")]
-use common_meta_sled_store::openraft::DefensiveCheckBase;
-#[cfg(feature = "raft-store-defensive")]
-use common_meta_sled_store::openraft::StoreExt;
 use common_meta_sled_store::SledKeySpace;
 use common_meta_stoerr::MetaStorageError;
 use common_meta_types::protobuf::raft_service_client::RaftServiceClient;
@@ -50,6 +47,7 @@ use common_meta_types::ConnectionError;
 use common_meta_types::Endpoint;
 use common_meta_types::ForwardRPCError;
 use common_meta_types::ForwardToLeader;
+use common_meta_types::GrpcConfig;
 use common_meta_types::InvalidReply;
 use common_meta_types::LogEntry;
 use common_meta_types::LogId;
@@ -89,7 +87,6 @@ use crate::meta_service::RaftServiceImpl;
 use crate::metrics::server_metrics;
 use crate::network::Network;
 use crate::store::RaftStore;
-use crate::store::RaftStoreBare;
 use crate::watcher::DispatcherSender;
 use crate::watcher::EventDispatcher;
 use crate::watcher::EventDispatcherHandle;
@@ -127,8 +124,11 @@ pub struct MetaNodeStatus {
     pub last_seq: u64,
 }
 
+pub type LogStore = Adaptor<TypeConfig, RaftStore>;
+pub type SMStore = Adaptor<TypeConfig, RaftStore>;
+
 /// MetaRaft is a implementation of the generic Raft handling meta data R/W.
-pub type MetaRaft = Raft<TypeConfig, Network, RaftStore>;
+pub type MetaRaft = Raft<TypeConfig, Network, LogStore, SMStore>;
 
 /// MetaNode is the container of meta data related components and threads, such as storage, the raft node and a raft-state monitor.
 pub struct MetaNode {
@@ -173,7 +173,9 @@ impl MetaNodeBuilder {
 
         let net = Network::new(sto.clone());
 
-        let raft = MetaRaft::new(node_id, Arc::new(config), net, sto.clone())
+        let (log_store, sm_store) = Adaptor::new(sto.clone());
+
+        let raft = MetaRaft::new(node_id, Arc::new(config), net, log_store, sm_store)
             .await
             .map_err(|e| MetaStartupError::MetaServiceError(e.to_string()))?;
         let metrics_rx = raft.metrics();
@@ -286,7 +288,9 @@ impl MetaNode {
         let mut rx = mn.running_rx.clone();
 
         let meta_srv_impl = RaftServiceImpl::create(mn.clone());
-        let meta_srv = RaftServiceServer::new(meta_srv_impl);
+        let meta_srv = RaftServiceServer::new(meta_srv_impl)
+            .max_decoding_message_size(GrpcConfig::MAX_DECODING_SIZE)
+            .max_encoding_message_size(GrpcConfig::MAX_ENCODING_SIZE);
 
         let ipv4_addr = host.parse::<Ipv4Addr>();
         let addr = match ipv4_addr {
@@ -368,14 +372,7 @@ impl MetaNode {
             config.no_sync = true;
         }
 
-        let sto = RaftStoreBare::open_create(&config, open, create).await?;
-
-        #[cfg(feature = "raft-store-defensive")]
-        let sto = {
-            let sto_ext = StoreExt::new(sto);
-            sto_ext.set_defensive(true);
-            sto_ext
-        };
+        let sto = RaftStore::open_create(&config, open, create).await?;
 
         // config.id only used for the first time
         let self_node_id = if sto.is_opened() { sto.id } else { config.id };
@@ -649,10 +646,10 @@ impl MetaNode {
                 match res {
                     Ok(x) => return Ok(x),
                     Err(api_err) => {
-                        tracing::warn!("{} while joining cluster via {}", api_err, addr);
+                        warn!("{} while joining cluster via {}", api_err, addr);
+                        let can_retry = api_err.is_retryable();
 
-                        if let MetaAPIError::CanNotForward(_) = &api_err {
-                            // Leader is not ready, wait a while and retry
+                        if can_retry {
                             sleep(Duration::from_millis(1_000)).await;
                             continue;
                         } else {
@@ -829,6 +826,9 @@ impl MetaNode {
         let mut cluster_node_ids = BTreeSet::new();
         cluster_node_ids.insert(node_id);
 
+        // TODO(1): initialize() and add_node() are not done atomically.
+        //          There is an issue that just after initializing the cluster, the node will be used but no node info is found.
+        //          To address it, upgrade to membership with embedded Node.
         self.raft.initialize(cluster_node_ids).await?;
 
         info!("initialized cluster");
@@ -1130,7 +1130,7 @@ impl MetaNode {
             .await
             .map_err(|e| MetaNetworkError::GetNodeAddrError(e.to_string()))?;
 
-        let mut client = RaftServiceClient::connect(format!("http://{}", endpoint))
+        let client = RaftServiceClient::connect(format!("http://{}", endpoint))
             .await
             .map_err(|e| {
                 MetaNetworkError::ConnectionError(ConnectionError::new(
@@ -1138,6 +1138,10 @@ impl MetaNode {
                     format!("address: {}", endpoint),
                 ))
             })?;
+
+        let mut client = client
+            .max_decoding_message_size(GrpcConfig::MAX_DECODING_SIZE)
+            .max_encoding_message_size(GrpcConfig::MAX_ENCODING_SIZE);
 
         let resp = client.forward(req).await.map_err(|e| {
             MetaNetworkError::from(e)

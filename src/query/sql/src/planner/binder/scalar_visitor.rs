@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -76,9 +76,7 @@ pub trait ScalarVisitor: Sized {
                                         stack.push(RecursionProcessing::Call(arg));
                                     }
                                 }
-                                ScalarExpr::BoundColumnRef(_)
-                                | ScalarExpr::BoundInternalColumnRef(_)
-                                | ScalarExpr::ConstantExpr(_) => {}
+                                ScalarExpr::BoundColumnRef(_) | ScalarExpr::ConstantExpr(_) => {}
                                 ScalarExpr::CastExpr(cast) => {
                                     stack.push(RecursionProcessing::Call(&cast.argument))
                                 }

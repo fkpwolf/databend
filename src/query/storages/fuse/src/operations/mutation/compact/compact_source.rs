@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ use crate::operations::mutation::CompactPartInfo;
 use crate::pipelines::processors::port::OutputPort;
 use crate::pipelines::processors::processor::Event;
 use crate::pipelines::processors::Processor;
+use crate::statistics::ClusterStatsGenerator;
 
 pub struct CompactSource {
     ctx: Arc<dyn TableContext>,
@@ -65,6 +66,7 @@ impl CompactSource {
             meta_locations,
             source_schema,
             write_settings,
+            cluster_stats_gen: ClusterStatsGenerator::default(),
         };
         Ok(ProcessorPtr::create(Box::new(CompactSource {
             ctx,
@@ -158,7 +160,9 @@ impl Processor for CompactSource {
                 };
                 // build block serialization.
                 let serialized = GlobalIORuntime::instance()
-                    .spawn_blocking(move || block_builder.build(new_block))
+                    .spawn_blocking(move || {
+                        block_builder.build(new_block, |block, _| Ok((None, block)))
+                    })
                     .await?;
 
                 let start = Instant::now();

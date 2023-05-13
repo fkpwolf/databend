@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -367,6 +367,7 @@ impl Binder {
                     let mut bind_context = BindContext::new();
                     let stmt = SelectStmt {
                         span: *span,
+                        hints: None,
                         distinct: false,
                         select_list: vec![SelectTarget::AliasedExpr {
                             expr: Box::new(common_ast::ast::Expr::FunctionCall {
@@ -389,7 +390,8 @@ impl Binder {
                         having: None,
                         window_list: None,
                     };
-                    self.bind_select_stmt(&mut bind_context, &stmt, &[]).await
+                    self.bind_select_stmt(&mut bind_context, &stmt, &[], 0)
+                        .await
                 } else {
                     // Other table functions always reside is default catalog
                     let table_meta: Arc<dyn TableFunction> = self
@@ -758,9 +760,10 @@ impl Binder {
                     &self.name_resolution_ctx,
                     self.metadata.clone(),
                     &[],
+                    false,
                 );
                 let box (scalar, _) = type_checker.resolve(expr).await?;
-                let scalar_expr = scalar.as_expr_with_col_name()?;
+                let scalar_expr = scalar.as_expr()?;
 
                 let (new_expr, _) = ConstantFolder::fold(
                     &scalar_expr,

@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,9 +34,9 @@ use databend_meta::version::METASRV_COMMIT_VERSION;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// TODO(xuanwo)
-///
-/// We should make metactl config keeps backward compatibility too.
+// TODO(xuanwo)
+//
+// We should make metactl config keeps backward compatibility too.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Parser)]
 #[clap(about, version = &**METASRV_COMMIT_VERSION, author)]
 pub struct Config {
@@ -208,15 +208,31 @@ async fn main() -> anyhow::Result<()> {
     let _guards = init_logging("metactl", &log_config);
 
     eprintln!();
-    eprintln!("███╗   ███╗███████╗████████╗ █████╗        ██████╗████████╗██╗     ");
-    eprintln!("████╗ ████║██╔════╝╚══██╔══╝██╔══██╗      ██╔════╝╚══██╔══╝██║     ");
-    eprintln!("██╔████╔██║█████╗     ██║   ███████║█████╗██║        ██║   ██║     ");
-    eprintln!("██║╚██╔╝██║██╔══╝     ██║   ██╔══██║╚════╝██║        ██║   ██║     ");
-    eprintln!("██║ ╚═╝ ██║███████╗   ██║   ██║  ██║      ╚██████╗   ██║   ███████╗");
-    eprintln!("╚═╝     ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝       ╚═════╝   ╚═╝   ╚══════╝");
+    eprintln!("╔╦╗╔═╗╔╦╗╔═╗   ╔═╗╔╦╗╦  ");
+    eprintln!("║║║║╣  ║ ╠═╣───║   ║ ║  ");
+    eprintln!("╩ ╩╚═╝ ╩ ╩ ╩   ╚═╝ ╩ ╩═╝ Databend");
     eprintln!();
 
-    eprintln!("config: {}", pretty(&config)?);
+    // eprintln!("███╗   ███╗███████╗████████╗ █████╗        ██████╗████████╗██╗     ");
+    // eprintln!("████╗ ████║██╔════╝╚══██╔══╝██╔══██╗      ██╔════╝╚══██╔══╝██║     ");
+    // eprintln!("██╔████╔██║█████╗     ██║   ███████║█████╗██║        ██║   ██║     ");
+    // eprintln!("██║╚██╔╝██║██╔══╝     ██║   ██╔══██║╚════╝██║        ██║   ██║     ");
+    // eprintln!("██║ ╚═╝ ██║███████╗   ██║   ██║  ██║      ╚██████╗   ██║   ███████╗");
+    // eprintln!("╚═╝     ╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝       ╚═════╝   ╚═╝   ╚══════╝");
+
+    // ██████╗  █████╗ ████████╗ █████╗ ██████╗ ███████╗███╗   ██╗██████╗
+    // ██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗██╔══██╗██╔════╝████╗  ██║██╔══██╗
+    // ██║  ██║███████║   ██║   ███████║██████╔╝█████╗  ██╔██╗ ██║██║  ██║
+    // ██║  ██║██╔══██║   ██║   ██╔══██║██╔══██╗██╔══╝  ██║╚██╗██║██║  ██║
+    // ██████╔╝██║  ██║   ██║   ██║  ██║██████╔╝███████╗██║ ╚████║██████╔╝
+    // ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝╚═════╝
+    // ╔╦╗╔═╗╔╦╗╔═╗   ╔═╗╔╦╗╦
+    // ║║║║╣  ║ ╠═╣───║   ║ ║
+    // ╩ ╩╚═╝ ╩ ╩ ╩   ╚═╝ ╩ ╩═╝
+
+    eprintln!("Version: {}", METASRV_COMMIT_VERSION.as_str());
+    eprintln!();
+    eprintln!("Config: {}", pretty(&config)?);
 
     if !config.cmd.is_empty() {
         return match config.cmd.as_str() {
@@ -237,10 +253,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if config.export {
+        eprintln!();
+        eprintln!("Export:");
         return snapshot::export_data(&config).await;
     }
 
     if config.import {
+        eprintln!();
+        eprintln!("Import:");
         return snapshot::import_data(&config).await;
     }
 

@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -201,6 +201,7 @@ impl Rule for RuleLeftAssociateJoin {
                 t1.clone(),
                 SExpr::create_binary(join_4.into(), t2.clone(), t3.clone()),
             ],
+            None,
             None,
             None,
         );

@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ use common_catalog::plan::Partitions;
 use common_catalog::plan::PartitionsShuffleKind;
 use common_catalog::plan::Projection;
 use common_catalog::plan::PushDownInfo;
+use common_catalog::table::NavigationPoint;
 use common_catalog::table::Table;
 use common_catalog::table::TableStatistics;
 use common_catalog::table_args::TableArgs;
@@ -611,8 +612,14 @@ impl Table for HiveTable {
     }
 
     #[async_backtrace::framed]
-    async fn purge(&self, _ctx: Arc<dyn TableContext>, _keep_last_snapshot: bool) -> Result<()> {
-        Ok(())
+    async fn purge(
+        &self,
+        _ctx: Arc<dyn TableContext>,
+        _instant: Option<NavigationPoint>,
+        _keep_last_snapshot: bool,
+        _dry_run_limit: Option<usize>,
+    ) -> Result<Option<Vec<String>>> {
+        Ok(None)
     }
 
     fn table_statistics(&self) -> Result<Option<TableStatistics>> {

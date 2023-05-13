@@ -1,4 +1,4 @@
-// Copyright 2021 Datafuse Labs.
+// Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,13 +19,13 @@ use std::sync::Arc;
 
 use common_meta_app::app_error::AppError;
 use common_meta_app::app_error::ShareHasNoGrantedDatabase;
+use common_meta_app::app_error::TxnRetryMaxTimes;
 use common_meta_app::app_error::UnknownDatabase;
 use common_meta_app::app_error::UnknownShare;
 use common_meta_app::app_error::UnknownShareAccounts;
 use common_meta_app::app_error::UnknownShareEndpoint;
 use common_meta_app::app_error::UnknownShareEndpointId;
 use common_meta_app::app_error::UnknownShareId;
-use common_meta_app::app_error::UnknownShareTable;
 use common_meta_app::app_error::UnknownTable;
 use common_meta_app::app_error::UnknownTableId;
 use common_meta_app::app_error::WrongShare;
@@ -100,7 +100,7 @@ pub async fn get_u64_value<T: kvapi::Key>(
 pub async fn get_pb_value<K, T>(
     kv_api: &(impl kvapi::KVApi<Error = MetaError> + ?Sized),
     k: &K,
-) -> Result<(u64, Option<T>), KVAppError>
+) -> Result<(u64, Option<T>), MetaError>
 where
     K: kvapi::Key,
     T: FromToProto,
@@ -139,17 +139,15 @@ where
     Ok(seq_values)
 }
 
-/// It returns a vec of structured key(such as DatabaseNameIdent), such as:
+/// Return a vec of structured key(such as `DatabaseNameIdent`), such as:
 /// all the `db_name` with prefix `__fd_database/<tenant>/`.
 pub async fn list_keys<K: kvapi::Key>(
     kv_api: &(impl kvapi::KVApi<Error = MetaError> + ?Sized),
     key: &K,
-) -> Result<Vec<K>, KVAppError> {
+) -> Result<Vec<K>, MetaError> {
     let res = kv_api.prefix_list_kv(&key.to_string_key()).await?;
 
-    let n = res.len();
-
-    let mut structured_keys = Vec::with_capacity(n);
+    let mut structured_keys = Vec::with_capacity(res.len());
 
     for (str_key, _seq_id) in res.iter() {
         let struct_key = K::from_str_key(str_key).map_err(|e| {
@@ -267,6 +265,36 @@ where
     Ok(v)
 }
 
+/// Returns an [`Iterator`] that indicate to try to submit a txn or give up.
+///
+/// It return `n` `Ok` items followed by an `Err` which is a max-retries exceeded error.
+///
+/// For example:
+/// ```
+/// fn update_table() -> Result<(), AppError> {
+///     let mut trials = txn_trials(3, "update_table");
+///     loop {
+///         trials.next().unwrap()?;
+///         // do something
+///     }
+/// }
+/// ```
+pub fn txn_trials<'a>(
+    n: Option<u32>,
+    ctx: impl Display + 'a,
+) -> impl Iterator<Item = Result<u32, AppError>> + 'a {
+    let n = n.unwrap_or(TXN_MAX_RETRY_TIMES);
+
+    (1..=(n + 1)).map(move |i| {
+        if i <= n {
+            Ok(i)
+        } else {
+            let err = TxnRetryMaxTimes::new(&ctx.to_string(), n);
+            Err(AppError::from(err))
+        }
+    })
+}
+
 pub async fn send_txn(
     kv_api: &(impl kvapi::KVApi<Error = MetaError> + ?Sized),
     txn_req: TxnRequest,
@@ -315,6 +343,7 @@ pub fn txn_op_del(key: &impl kvapi::Key) -> TxnOp {
         request: Some(Request::Delete(TxnDeleteRequest {
             key: key.to_string_key(),
             prev_value: true,
+            match_seq: None,
         })),
     }
 }
@@ -341,23 +370,66 @@ pub fn db_has_to_exist(
     }
 }
 
-/// Return OK if a table_id or table_meta exists by checking the seq.
+/// Return OK if a `table_name_ident->*` exists by checking the seq.
 ///
-/// Otherwise returns UnknownTable error
-pub fn table_has_to_exist(
+/// Otherwise returns [`AppError::UnknownTable`] error
+pub fn assert_table_exist(
     seq: u64,
     name_ident: &TableNameIdent,
     ctx: impl Display,
-) -> Result<(), KVAppError> {
-    if seq == 0 {
-        debug!(seq, ?name_ident, "does not exist");
-
-        Err(KVAppError::AppError(AppError::UnknownTable(
-            UnknownTable::new(&name_ident.table_name, format!("{}: {}", ctx, name_ident)),
-        )))
-    } else {
-        Ok(())
+) -> Result<(), AppError> {
+    if seq > 0 {
+        return Ok(());
     }
+
+    debug!(seq, ?name_ident, "does not exist");
+
+    Err(UnknownTable::new(
+        &name_ident.table_name,
+        format!("{}: {}", ctx, name_ident),
+    ))?
+}
+
+/// Return OK if a `table_id->*` exists by checking the seq.
+///
+/// Otherwise returns [`AppError::UnknownTableId`] error
+pub fn assert_table_id_exist(
+    seq: u64,
+    table_id: &TableId,
+    ctx: impl Display,
+) -> Result<(), AppError> {
+    if seq > 0 {
+        return Ok(());
+    }
+
+    debug!(seq, ?table_id, "does not exist");
+
+    Err(UnknownTableId::new(
+        table_id.table_id,
+        format!("{}: {}", ctx, table_id),
+    ))?
+}
+
+/// Get `table_meta_seq` and [`TableMeta`] by [`TableId`],
+/// or return [`AppError::UnknownTableId`] error wrapped in a [`KVAppError`] if not found.
+pub async fn get_table_by_id_or_err(
+    kv_api: &(impl kvapi::KVApi<Error = MetaError> + ?Sized),
+    table_id: &TableId,
+    ctx: impl Display + Copy,
+) -> Result<(u64, TableMeta), KVAppError> {
+    let (seq, table_meta): (_, Option<TableMeta>) = get_pb_value(kv_api, table_id).await?;
+    assert_table_id_exist(seq, table_id, ctx)?;
+
+    let table_meta = table_meta.unwrap();
+
+    debug!(
+        ident = display(table_id),
+        table_meta = debug(&table_meta),
+        "{}",
+        ctx
+    );
+
+    Ok((seq, table_meta))
 }
 
 // Return (share_endpoint_id_seq, share_endpoint_id, share_endpoint_meta_seq, share_endpoint_meta)
@@ -947,14 +1019,14 @@ pub async fn remove_table_from_share(
     let (_seq, share_name) = get_share_id_to_name_or_err(
         kv_api,
         share_id,
-        format!("remove_db_from_share: {}", share_id),
+        format!("remove_table_from_share: {}", share_id),
     )
     .await?;
 
     let (share_meta_seq, mut share_meta) = get_share_meta_by_id_or_err(
         kv_api,
         share_id,
-        format!("remove_db_from_share: {}", share_id),
+        format!("remove_table_from_share: {}", share_id),
     )
     .await?;
 
@@ -973,13 +1045,12 @@ pub async fn remove_table_from_share(
             share_meta.entries.remove(&table_name);
         }
         None => {
-            return Err(KVAppError::AppError(AppError::UnknownShareTable(
-                UnknownShareTable::new(
-                    &table_name.tenant,
-                    &share_name.share_name,
-                    &table_name.table_name,
-                ),
-            )));
+            tracing::warn!(
+                "remove_table_from_share: table {} not found of share {} in tenant {}",
+                &table_name.table_name,
+                &share_name.share_name,
+                &table_name.tenant
+            );
         }
     }
 
