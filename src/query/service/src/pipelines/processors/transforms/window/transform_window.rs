@@ -29,6 +29,7 @@ use common_expression::BlockEntry;
 use common_expression::Column;
 use common_expression::ColumnBuilder;
 use common_expression::DataBlock;
+use common_expression::Scalar;
 use common_expression::ScalarRef;
 use common_expression::SortColumnDescription;
 use common_expression::Value;
@@ -36,6 +37,7 @@ use common_pipeline_core::processors::port::InputPort;
 use common_pipeline_core::processors::port::OutputPort;
 use common_pipeline_core::processors::processor::Event;
 use common_pipeline_core::processors::Processor;
+use common_sql::executor::LagLeadDefault;
 use common_sql::plans::WindowFuncFrameUnits;
 
 use super::frame_bound::FrameBound;
@@ -206,7 +208,9 @@ impl<T: Number> TransformWindow<T> {
 
         let block_rows = self.block_rows(&self.partition_end);
 
+        // STEP 1: Increment `self.partition_end` until it reaches the end of the partition or the end of the block.
         while self.partition_end.row < block_rows {
+            // STEP 2: Check each partition column to see if it has changed.
             let mut i = 0;
             while i < partition_by_columns {
                 // Should use `prev_frame_start` because the block at `partition_start` may already be popped out of the buffer queue.
@@ -223,6 +227,7 @@ impl<T: Number> TransformWindow<T> {
                 i += 1;
             }
 
+            // STEP 3: If any partition column has changed, we have reached the end of the partition.
             if i < partition_by_columns {
                 self.partition_ended = true;
                 return;
@@ -340,6 +345,17 @@ impl<T: Number> TransformWindow<T> {
         row
     }
 
+    /// Goback the row to the preceding one row
+    fn goback_row(&self, mut row: RowPtr) -> RowPtr {
+        if row.row != 0 {
+            row.row -= 1;
+        } else {
+            row.block -= 1;
+            row.row = self.block_rows(&row) - 1;
+        }
+        row
+    }
+
     /// If the two rows are within the same peer group.
     fn are_peers(&self, lhs: &RowPtr, rhs: &RowPtr, for_computing_bound: bool) -> bool {
         if lhs == rhs {
@@ -452,34 +468,119 @@ impl<T: Number> TransformWindow<T> {
 
     #[inline]
     fn merge_result_of_current_row(&mut self) -> Result<()> {
-        let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
-
         match &self.func {
             WindowFunctionImpl::Aggregate(agg) => {
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
                 agg.merge_result(builder)?;
             }
             WindowFunctionImpl::RowNumber => {
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
                 builder.push(ScalarRef::Number(NumberScalar::UInt64(
                     self.current_row_in_partition as u64,
                 )));
             }
             WindowFunctionImpl::Rank => {
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
                 builder.push(ScalarRef::Number(NumberScalar::UInt64(
                     self.current_rank as u64,
                 )));
             }
             WindowFunctionImpl::DenseRank => {
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
                 builder.push(ScalarRef::Number(NumberScalar::UInt64(
                     self.current_dense_rank as u64,
                 )));
             }
             WindowFunctionImpl::PercentRank => {
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
                 let percent = if self.partition_size <= 1 {
                     0_f64
                 } else {
                     ((self.current_rank - 1) as f64) / ((self.partition_size - 1) as f64)
                 };
                 builder.push(ScalarRef::Number(NumberScalar::Float64(percent.into())));
+            }
+            WindowFunctionImpl::Lag(lag) => {
+                let lag_row = if self.frame_start == self.frame_end {
+                    let default_value = match lag.default.clone() {
+                        LagLeadDefault::Null => Scalar::Null,
+                        LagLeadDefault::Index(col) => {
+                            let block =
+                                &self.blocks[self.current_row.block - self.first_block].block;
+                            let value = &block.get_by_offset(col).value;
+                            value.index(self.current_row.row).unwrap().to_owned()
+                        }
+                    };
+                    default_value
+                } else {
+                    let block = &self
+                        .blocks
+                        .get(self.frame_start.block - self.first_block)
+                        .unwrap()
+                        .block;
+                    let value = &block.get_by_offset(lag.arg).value;
+                    value.index(self.frame_start.row).unwrap().to_owned()
+                };
+
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
+                builder.push(lag_row.as_ref());
+            }
+            WindowFunctionImpl::Lead(lead) => {
+                let lead_row = if self.frame_start == self.frame_end {
+                    let default_value = match lead.default.clone() {
+                        LagLeadDefault::Null => Scalar::Null,
+                        LagLeadDefault::Index(col) => {
+                            let block =
+                                &self.blocks[self.current_row.block - self.first_block].block;
+                            let value = &block.get_by_offset(col).value;
+                            value.index(self.current_row.row).unwrap().to_owned()
+                        }
+                    };
+                    default_value
+                } else {
+                    let block = &self
+                        .blocks
+                        .get(self.frame_start.block - self.first_block)
+                        .unwrap()
+                        .block;
+                    let value = &block.get_by_offset(lead.arg).value;
+                    value.index(self.frame_start.row).unwrap().to_owned()
+                };
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
+                builder.push(lead_row.as_ref());
+            }
+            WindowFunctionImpl::FirstValue(first) => {
+                let value = if self.frame_start < self.frame_end {
+                    let block = &self
+                        .blocks
+                        .get(self.frame_start.block - self.first_block)
+                        .unwrap()
+                        .block;
+                    let col = block.get_by_offset(first.arg).value.as_column().unwrap();
+                    col.index(self.frame_start.row).unwrap().to_owned()
+                } else {
+                    Scalar::Null
+                };
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
+                builder.push(value.as_ref());
+            }
+            WindowFunctionImpl::LastValue(last) => {
+                let value = if self.frame_start < self.frame_end {
+                    let last_row = self.goback_row(self.frame_end);
+                    debug_assert!(self.frame_start <= last_row);
+
+                    let block = &self
+                        .blocks
+                        .get(last_row.block - self.first_block)
+                        .unwrap()
+                        .block;
+                    let col = block.get_by_offset(last.arg).value.as_column().unwrap();
+                    col.index(last_row.row).unwrap().to_owned()
+                } else {
+                    Scalar::Null
+                };
+                let builder = &mut self.blocks[self.current_row.block - self.first_block].builder;
+                builder.push(value.as_ref());
             }
         };
 
@@ -756,7 +857,7 @@ where T: Number + ResultTypeOfUnary
     /// When adding a [`DataBlock`], we compute the aggregations to the end.
     ///
     /// For each row in the input block,
-    /// compute the aggregation result of its window frame and add it intp result column buffer.
+    /// compute the aggregation result of its window frame and add it into result column buffer.
     ///
     /// If not reach the end bound of the window frame, hold the temporary aggregation value in `state_place`.
     ///

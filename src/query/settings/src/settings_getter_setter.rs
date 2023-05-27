@@ -127,7 +127,9 @@ impl Settings {
         if val > 0 {
             self.try_set_u64("max_storage_io_requests", val)
         } else {
-            Err(ErrorCode::BadArguments("Value must be greater than 0"))
+            Err(ErrorCode::BadArguments(
+                "max_storage_io_requests must be greater than 0",
+            ))
         }
     }
 
@@ -338,6 +340,14 @@ impl Settings {
 
     pub fn get_parquet_fast_read_bytes(&self) -> Result<u64> {
         self.try_get_u64("parquet_fast_read_bytes")
+    }
+
+    pub fn set_table_lock_expire_secs(&self, val: u64) -> Result<()> {
+        self.try_set_u64("table_lock_expire_secs", val)
+    }
+
+    pub fn get_table_lock_expire_secs(&self) -> Result<u64> {
+        self.try_get_u64("table_lock_expire_secs")
     }
 
     pub fn get_enterprise_license(&self) -> Result<String> {

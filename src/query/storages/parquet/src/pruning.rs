@@ -107,7 +107,7 @@ impl PartitionPruner {
                     .zip(file_meta.row_groups.iter())
                     .enumerate()
                 {
-                    row_group_pruned[idx] = !pruner.should_keep(stats);
+                    row_group_pruned[idx] = !pruner.should_keep(stats, None);
                 }
                 Some(row_group_stats)
             } else {
@@ -219,8 +219,8 @@ impl PartitionPruner {
         // 1. Read parquet meta data. Distinguish between sync and async reading.
         let file_metas = if is_blocking_io {
             let mut file_metas = Vec::with_capacity(locations.len());
-            for (location, _size) in large_files {
-                let mut reader = operator.blocking().reader(&location)?;
+            for (location, _size) in &large_files {
+                let mut reader = operator.blocking().reader(location)?;
                 let file_meta = pread::read_metadata(&mut reader).map_err(|e| {
                     ErrorCode::Internal(format!(
                         "Read parquet file '{}''s meta error: {}",
@@ -239,8 +239,11 @@ impl PartitionPruner {
         // If one row group does not have stats, we cannot use the stats for topk optimization.
         for (file_id, file_meta) in file_metas.into_iter().enumerate() {
             stats.partitions_total += file_meta.row_groups.len();
-            let (sub_stats, parts) =
-                self.read_and_prune_file_meta(&locations[file_id].0, file_meta, operator.clone())?;
+            let (sub_stats, parts) = self.read_and_prune_file_meta(
+                &large_files[file_id].0,
+                file_meta,
+                operator.clone(),
+            )?;
             for p in parts {
                 partitions.push(ParquetPart::RowGroup(p));
             }
@@ -330,7 +333,7 @@ fn filter_pages<R: Read + Seek>(
                 let stats = BatchStatistics::from_column_statistics(stats, &data_type.into())?;
                 for (page_num, intv) in page_intervals.iter().enumerate() {
                     let stat = stats.get(page_num);
-                    if pruner.should_keep(&HashMap::from([(*col_offset as u32, stat)])) {
+                    if pruner.should_keep(&HashMap::from([(*col_offset as u32, stat)]), None) {
                         row_selection.push(*intv);
                     }
                 }
@@ -684,7 +687,7 @@ mod tests {
                 .project_column_ref(|col| col.column_name.clone());
             let pruner =
                 RangePrunerCreator::try_create(FunctionContext::default(), &schema, Some(&filter))?;
-            assert!(!pruner.should_keep(&row_group_stats[0]));
+            assert!(!pruner.should_keep(&row_group_stats[0], None));
         }
 
         // col1 < 0
@@ -717,7 +720,7 @@ mod tests {
                 .project_column_ref(|col| col.column_name.clone());
             let pruner =
                 RangePrunerCreator::try_create(FunctionContext::default(), &schema, Some(&filter))?;
-            assert!(!pruner.should_keep(&row_group_stats[0]));
+            assert!(!pruner.should_keep(&row_group_stats[0], None));
         }
 
         // col1 <= 5
@@ -750,7 +753,7 @@ mod tests {
                 .project_column_ref(|col| col.column_name.clone());
             let pruner =
                 RangePrunerCreator::try_create(FunctionContext::default(), &schema, Some(&filter))?;
-            assert!(pruner.should_keep(&row_group_stats[0]));
+            assert!(pruner.should_keep(&row_group_stats[0], None));
         }
 
         Ok(())

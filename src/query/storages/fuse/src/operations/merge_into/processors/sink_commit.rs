@@ -24,8 +24,11 @@ use common_expression::BlockMetaInfoDowncast;
 use common_expression::BlockMetaInfoPtr;
 use opendal::Operator;
 use storages_common_table_meta::meta::Location;
+use storages_common_table_meta::meta::SegmentInfo;
 use storages_common_table_meta::meta::Statistics;
 use storages_common_table_meta::meta::TableSnapshot;
+use table_lock::TableLockHandlerWrapper;
+use table_lock::TableLockHeartbeat;
 
 use crate::io::SegmentsIO;
 use crate::io::TableMetaLocationGenerator;
@@ -50,6 +53,7 @@ enum State {
     None,
     ReadMeta(BlockMetaInfoPtr),
     TryCommit(TableSnapshot),
+    TryLock(TableSnapshot),
     RefreshTable,
     DetectConflict(Arc<TableSnapshot>),
     MergeSegments(Vec<Location>),
@@ -72,6 +76,7 @@ pub struct CommitSink {
     // summarised statistics of all the merged segments.
     merged_statistics: Statistics,
     abort_operation: AbortOperation,
+    heartbeat: TableLockHeartbeat,
 
     retries: u64,
 
@@ -95,6 +100,7 @@ impl CommitSink {
             merged_segments: vec![],
             merged_statistics: Statistics::default(),
             abort_operation: AbortOperation::default(),
+            heartbeat: TableLockHeartbeat::default(),
             retries: 0,
             input,
         })))
@@ -120,6 +126,7 @@ impl Processor for CommitSink {
             &self.state,
             State::MergeSegments(_)
                 | State::TryCommit(_)
+                | State::TryLock(_)
                 | State::RefreshTable
                 | State::AbortOperation
         ) {
@@ -164,7 +171,12 @@ impl Processor for CommitSink {
                 let mut new_snapshot = TableSnapshot::from_previous(&self.base_snapshot);
                 new_snapshot.segments = self.merged_segments.clone();
                 new_snapshot.summary = self.merged_statistics.clone();
-                self.state = State::TryCommit(new_snapshot);
+
+                if meta.need_lock {
+                    self.state = State::TryLock(new_snapshot);
+                } else {
+                    self.state = State::TryCommit(new_snapshot);
+                }
             }
             State::DetectConflict(latest_snapshot) => {
                 // Check if there is only insertion during the operation.
@@ -198,12 +210,27 @@ impl Processor for CommitSink {
     #[async_backtrace::framed]
     async fn async_process(&mut self) -> Result<()> {
         match std::mem::replace(&mut self.state, State::None) {
-            State::TryCommit(new_snapshot) => {
+            State::TryLock(new_snapshot) => {
                 let table_info = self.table.get_table_info();
-
+                let handler = TableLockHandlerWrapper::instance(self.ctx.clone());
+                match handler.try_lock(self.ctx.clone(), table_info.clone()).await {
+                    Ok(heartbeat) => {
+                        self.heartbeat = heartbeat;
+                        self.state = State::TryCommit(new_snapshot);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "commit mutation failed cause get lock failed, error: {:?}",
+                            e
+                        );
+                        self.state = State::AbortOperation;
+                    }
+                }
+            }
+            State::TryCommit(new_snapshot) => {
                 match FuseTable::commit_to_meta_server(
                     self.ctx.as_ref(),
-                    table_info,
+                    self.table.get_table_info(),
                     &self.location_gen,
                     new_snapshot,
                     None,
@@ -212,20 +239,23 @@ impl Processor for CommitSink {
                 )
                 .await
                 {
-                    Err(e) if e.code() == ErrorCode::TABLE_VERSION_MISMATCHED => {
-                        if self.retries < MAX_RETRIES {
-                            self.state = State::RefreshTable;
-                        } else {
+                    Err(e) => {
+                        if e.code() != ErrorCode::TABLE_VERSION_MISMATCHED
+                            || self.retries >= MAX_RETRIES
+                        {
                             tracing::error!(
-                                "commit mutation failed after {} retries",
-                                self.retries
+                                "commit mutation failed after {} retries, error: {:?}",
+                                self.retries,
+                                e,
                             );
                             self.state = State::AbortOperation;
+                        } else {
+                            self.state = State::RefreshTable;
                         }
                     }
-                    Err(e) => return Err(e),
                     Ok(_) => {
                         metrics_inc_commit_mutation_success();
+                        self.heartbeat.shutdown().await?;
                         self.state = State::Finish;
                     }
                 };
@@ -250,8 +280,9 @@ impl Processor for CommitSink {
                         .collect();
                     let segments_io =
                         SegmentsIO::create(self.ctx.clone(), self.dal.clone(), self.table.schema());
-                    let append_segment_infos =
-                        segments_io.read_segments(&appended_segments, true).await?;
+                    let append_segment_infos = segments_io
+                        .read_segments::<Arc<SegmentInfo>>(&appended_segments, true)
+                        .await?;
                     for result in append_segment_infos.into_iter() {
                         let appended_segment = result?;
                         merge_statistics_mut(
@@ -265,6 +296,7 @@ impl Processor for CommitSink {
                 self.state = State::TryCommit(new_snapshot);
             }
             State::AbortOperation => {
+                self.heartbeat.shutdown().await?;
                 let op = self.abort_operation.clone();
                 op.abort(self.ctx.clone(), self.dal.clone()).await?;
                 return Err(ErrorCode::StorageOther(

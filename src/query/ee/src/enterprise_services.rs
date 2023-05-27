@@ -16,8 +16,11 @@ use common_config::InnerConfig;
 use common_exception::Result;
 use common_license::license_manager::LicenseManager;
 
+use crate::aggregating_index::RealAggregatingIndexHandler;
+use crate::data_mask::RealDatamaskHandler;
 use crate::license::license_mgr::RealLicenseManager;
 use crate::storages::fuse::operations::RealVacuumHandler;
+use crate::table_lock::RealTableLockHandler;
 
 pub struct EnterpriseServices;
 impl EnterpriseServices {
@@ -25,6 +28,9 @@ impl EnterpriseServices {
     pub async fn init(_config: InnerConfig) -> Result<()> {
         RealLicenseManager::init()?;
         RealVacuumHandler::init()?;
+        RealAggregatingIndexHandler::init()?;
+        RealTableLockHandler::init()?;
+        RealDatamaskHandler::init()?;
         Ok(())
     }
 }

@@ -70,6 +70,9 @@ members = [
     "src/query/storages/result_cache",
     "src/query/users",
     "src/query/ee-features/vacuum-handler",
+    "src/query/ee-features/aggregating-index",
+    "src/query/ee-features/data-mask",
+    "src/query/ee-features/table-lock",
     # databend-query
     "src/query/service",
     # enterprise
@@ -100,7 +103,7 @@ members = [
 [workspace.dependencies]
 # databend maintains:
 sled = { git = "https://github.com/datafuse-extras/sled", tag = "v0.34.7-datafuse.1", default-features = false }
-opendal = { version = "0.34", features = [
+opendal = { version = "0.35", features = [
     "layers-tracing",
     "layers-metrics",
     "services-ipfs",
@@ -118,11 +121,15 @@ openraft = { git = "https://github.com/drmingdrmer/openraft", tag = "v0.8.4-alph
 
 # type helper
 derive_more = "0.99.17"
+lazy_static = "1.4.0"
 
 # error
 anyhow = { version = "1.0.65" }
 anyerror = { version = "=0.1.8" }
 thiserror = { version = "1" }
+
+# versioning
+semver = "1.0.14"
 
 # CLI
 clap = { version = "3.2.22", features = ["derive", "env"] }

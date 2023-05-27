@@ -26,6 +26,7 @@ use common_expression::TableDataType;
 use common_expression::TableField;
 use common_expression::TableSchema;
 use common_meta_app::schema as mt;
+use common_meta_app::schema::IndexType;
 use common_meta_app::share;
 use common_proto_conv::FromToProto;
 use common_proto_conv::Incompatible;
@@ -200,6 +201,16 @@ fn new_table_meta() -> mt::TableMeta {
     }
 }
 
+fn new_index_meta() -> mt::IndexMeta {
+    mt::IndexMeta {
+        table_id: 7,
+        index_type: IndexType::AGGREGATING,
+        created_on: Utc.with_ymd_and_hms(2015, 3, 9, 20, 0, 9).unwrap(),
+        drop_on: None,
+        query: "SELECT a, sum(b) FROM default.t1 WHERE a > 3 GROUP BY b".to_string(),
+    }
+}
+
 pub(crate) fn new_latest_schema() -> TableSchema {
     let b1 = TableDataType::Tuple {
         fields_name: vec!["b11".to_string(), "b12".to_string()],
@@ -241,8 +252,19 @@ pub(crate) fn new_table_copied_file_info_v6() -> mt::TableCopiedFileInfo {
     }
 }
 
-pub(crate) fn new_table_copied_file_lock_v7() -> mt::TableCopiedFileLock {
-    mt::TableCopiedFileLock {}
+pub(crate) fn new_empty_proto() -> mt::EmptyProto {
+    mt::EmptyProto {}
+}
+
+fn new_data_mask_meta() -> common_meta_app::data_mask::DatamaskMeta {
+    common_meta_app::data_mask::DatamaskMeta {
+        args: vec![("a".to_string(), "String".to_string())],
+        return_type: "String".to_string(),
+        body: "CASE WHEN current_role() IN('ANALYST') THEN VAL ELSE '*********' END".to_string(),
+        comment: Some("some comment".to_string()),
+        create_on: Utc.with_ymd_and_hms(2014, 11, 28, 12, 0, 9).unwrap(),
+        update_on: Some(Utc.with_ymd_and_hms(2014, 11, 28, 12, 0, 9).unwrap()),
+    }
 }
 
 #[test]
@@ -266,6 +288,17 @@ fn test_pb_from_to() -> anyhow::Result<()> {
     let p = share_account_meta.to_pb()?;
     let got = share::ShareAccountMeta::from_pb(p)?;
     assert_eq!(share_account_meta, got);
+
+    let index = new_index_meta();
+    let p = index.to_pb()?;
+    let got = mt::IndexMeta::from_pb(p)?;
+    assert_eq!(index, got);
+
+    let data_mask_meta = new_data_mask_meta();
+    let p = data_mask_meta.to_pb()?;
+    let got = common_meta_app::data_mask::DatamaskMeta::from_pb(p)?;
+    assert_eq!(data_mask_meta, got);
+
     Ok(())
 }
 
@@ -353,6 +386,16 @@ fn test_build_pb_buf() -> anyhow::Result<()> {
         println!("share account:{:?}", buf);
     }
 
+    // IndexMeta
+    {
+        let index = new_index_meta();
+        let p = index.to_pb()?;
+
+        let mut buf = vec![];
+        common_protos::prost::Message::encode(&p, &mut buf)?;
+        println!("index:{buf:?}");
+    }
+
     // TableCopiedFileInfo
     {
         let copied_file = new_table_copied_file_info_v6();
@@ -363,14 +406,14 @@ fn test_build_pb_buf() -> anyhow::Result<()> {
         println!("copied_file:{:?}", buf);
     }
 
-    // TableCopiedFileLock
+    // EmptyProto
     {
-        let copied_file_lock = new_table_copied_file_lock_v7();
-        let p = copied_file_lock.to_pb()?;
+        let empty_proto = new_empty_proto();
+        let p = empty_proto.to_pb()?;
 
         let mut buf = vec![];
         common_protos::prost::Message::encode(&p, &mut buf)?;
-        println!("copied_file_lock:{:?}", buf);
+        println!("empty_proto:{:?}", buf);
     }
 
     // schema
@@ -381,6 +424,16 @@ fn test_build_pb_buf() -> anyhow::Result<()> {
         let mut buf = vec![];
         common_protos::prost::Message::encode(&p, &mut buf)?;
         println!("schema:{:?}", buf);
+    }
+
+    // data mask
+    {
+        let data_mask_meta = new_data_mask_meta();
+        let p = data_mask_meta.to_pb()?;
+
+        let mut buf = vec![];
+        common_protos::prost::Message::encode(&p, &mut buf)?;
+        println!("data mask:{:?}", buf);
     }
 
     Ok(())

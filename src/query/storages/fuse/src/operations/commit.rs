@@ -401,7 +401,7 @@ impl FuseTable {
         };
 
         // 3. prepare the request
-        let catalog = ctx.get_catalog(&table_info.meta.catalog)?;
+        let catalog = ctx.get_catalog(table_info.catalog())?;
         let table_id = table_info.ident.table_id;
         let table_version = table_info.ident.seq;
 
@@ -665,7 +665,7 @@ impl FuseTable {
 
             let fuse_segment_io = SegmentsIO::create(ctx, operator, schema);
             let concurrent_appended_segment_infos = fuse_segment_io
-                .read_segments(concurrently_appended_segment_locations, true)
+                .read_segments::<Arc<SegmentInfo>>(concurrently_appended_segment_locations, true)
                 .await?;
 
             let mut new_statistics = base_summary.clone();

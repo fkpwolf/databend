@@ -85,7 +85,7 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expr: &'a Expr) {
             trim_where,
         } => visitor.visit_trim(*span, expr, trim_where),
         Expr::Literal { span, lit } => visitor.visit_literal(*span, lit),
-        Expr::CountAll { span } => visitor.visit_count_all(*span),
+        Expr::CountAll { span, window } => visitor.visit_count_all(*span, window),
         Expr::Tuple { span, exprs } => visitor.visit_tuple(*span, exprs),
         Expr::FunctionCall {
             span,
@@ -341,6 +341,7 @@ pub fn walk_statement<'a, V: Visitor<'a>>(visitor: &mut V, statement: &'a Statem
         Statement::ShowEngines => visitor.visit_show_engines(),
         Statement::ShowFunctions { limit } => visitor.visit_show_functions(limit),
         Statement::ShowTableFunctions { limit } => visitor.visit_show_table_functions(limit),
+        Statement::ShowIndexes => visitor.visit_show_indexes(),
         Statement::KillStmt {
             kill_target,
             object_id,
@@ -384,6 +385,8 @@ pub fn walk_statement<'a, V: Visitor<'a>>(visitor: &mut V, statement: &'a Statem
         Statement::CreateView(stmt) => visitor.visit_create_view(stmt),
         Statement::AlterView(stmt) => visitor.visit_alter_view(stmt),
         Statement::DropView(stmt) => visitor.visit_drop_view(stmt),
+        Statement::CreateIndex(stmt) => visitor.visit_create_index(stmt),
+        Statement::DropIndex(stmt) => visitor.visit_drop_index(stmt),
         Statement::ShowUsers => visitor.visit_show_users(),
         Statement::ShowRoles => visitor.visit_show_roles(),
         Statement::CreateUser(stmt) => visitor.visit_create_user(stmt),
@@ -459,5 +462,8 @@ pub fn walk_statement<'a, V: Visitor<'a>>(visitor: &mut V, statement: &'a Statem
             visitor.visit_show_object_grant_privileges(stmt)
         }
         Statement::ShowGrantsOfShare(stmt) => visitor.visit_show_grants_of_share(stmt),
+        Statement::CreateDatamaskPolicy(stmt) => visitor.visit_create_data_mask_policy(stmt),
+        Statement::DropDatamaskPolicy(stmt) => visitor.visit_drop_data_mask_policy(stmt),
+        Statement::DescDatamaskPolicy(stmt) => visitor.visit_desc_data_mask_policy(stmt),
     }
 }

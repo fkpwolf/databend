@@ -352,7 +352,24 @@ pub struct AggregateFunction {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct LagLeadFunction {
+    pub arg: Box<ScalarExpr>,
+    pub offset: u64,
+    pub default: Option<Box<ScalarExpr>>,
+    pub return_type: Box<DataType>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct FirstLastFunction {
+    pub arg: Box<ScalarExpr>,
+    pub return_type: Box<DataType>,
+}
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub struct WindowFunc {
+    #[educe(PartialEq(ignore), Eq(ignore), Hash(ignore))]
+    pub span: Span,
     pub display_name: String,
     pub partition_by: Vec<ScalarExpr>,
     pub func: WindowFuncType,

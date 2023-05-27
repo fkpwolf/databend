@@ -194,6 +194,8 @@ pub enum TokenKind {
     Multiply,
     #[token("/")]
     Divide,
+    #[token("//")]
+    IntDiv,
     #[token("%")]
     Modulo,
     #[token("||")]
@@ -285,6 +287,8 @@ pub enum TokenKind {
     ALL,
     #[token("ADD", ignore(ascii_case))]
     ADD,
+    #[token("AGGREGATING", ignore(ascii_case))]
+    AGGREGATING,
     #[token("ANY", ignore(ascii_case))]
     ANY,
     #[token("ARGS", ignore(ascii_case))]
@@ -545,6 +549,8 @@ pub enum TokenKind {
     IF,
     #[token("IN", ignore(ascii_case))]
     IN,
+    #[token("INDEX", ignore(ascii_case))]
+    INDEX,
     #[token("INNER", ignore(ascii_case))]
     INNER,
     #[token("INSERT", ignore(ascii_case))]
@@ -599,6 +605,8 @@ pub enum TokenKind {
     LIST,
     #[token("LZO", ignore(ascii_case))]
     LZO,
+    #[token("MASKING", ignore(ascii_case))]
+    MASKING,
     #[token("MAP", ignore(ascii_case))]
     MAP,
     #[token("MAX_FILE_SIZE", ignore(ascii_case))]
@@ -671,6 +679,8 @@ pub enum TokenKind {
     PIPELINE,
     #[token("PLAINTEXT_PASSWORD", ignore(ascii_case))]
     PLAINTEXT_PASSWORD,
+    #[token("POLICY", ignore(ascii_case))]
+    POLICY,
     #[token("POSITION", ignore(ascii_case))]
     POSITION,
     #[token("PROCESSLIST", ignore(ascii_case))]
@@ -725,6 +735,8 @@ pub enum TokenKind {
     REVOKE,
     #[token("RECURSIVE", ignore(ascii_case))]
     RECURSIVE,
+    #[token("RETURN", ignore(ascii_case))]
+    RETURN,
     #[token("RUN", ignore(ascii_case))]
     RUN,
     #[token("GRANTS", ignore(ascii_case))]
@@ -939,6 +951,8 @@ pub enum TokenKind {
     CUBE,
     #[token("ROLLUP", ignore(ascii_case))]
     ROLLUP,
+    #[token("INDEXES", ignore(ascii_case))]
+    INDEXES,
 }
 
 // Reference: https://www.postgresql.org/docs/current/sql-keywords-appendix.html
@@ -966,6 +980,7 @@ impl TokenKind {
                 | Minus
                 | Multiply
                 | Divide
+                | IntDiv
                 | Modulo
                 | StringConcat
                 | LParen
@@ -1266,6 +1281,8 @@ impl TokenKind {
             | TokenKind::WINDOW
             | TokenKind::WITH
             | TokenKind::IGNORE_RESULT
+            | TokenKind::MASKING
+            | TokenKind::POLICY
             if !after_as => true,
             _ => false
         }

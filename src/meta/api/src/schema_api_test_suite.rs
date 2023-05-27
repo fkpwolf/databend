@@ -26,6 +26,8 @@ use common_expression::TableSchema;
 use common_meta_app::schema::CountTablesReq;
 use common_meta_app::schema::CreateDatabaseReply;
 use common_meta_app::schema::CreateDatabaseReq;
+use common_meta_app::schema::CreateIndexReq;
+use common_meta_app::schema::CreateTableLockRevReq;
 use common_meta_app::schema::CreateTableReq;
 use common_meta_app::schema::DBIdTableName;
 use common_meta_app::schema::DatabaseId;
@@ -36,12 +38,20 @@ use common_meta_app::schema::DatabaseNameIdent;
 use common_meta_app::schema::DatabaseType;
 use common_meta_app::schema::DbIdList;
 use common_meta_app::schema::DbIdListKey;
+use common_meta_app::schema::DeleteTableLockRevReq;
 use common_meta_app::schema::DropDatabaseReq;
+use common_meta_app::schema::DropIndexReq;
 use common_meta_app::schema::DropTableByIdReq;
+use common_meta_app::schema::ExtendTableLockRevReq;
 use common_meta_app::schema::GetDatabaseReq;
 use common_meta_app::schema::GetTableCopiedFileReq;
 use common_meta_app::schema::GetTableReq;
+use common_meta_app::schema::IndexMeta;
+use common_meta_app::schema::IndexNameIdent;
+use common_meta_app::schema::IndexType;
 use common_meta_app::schema::ListDatabaseReq;
+use common_meta_app::schema::ListIndexesReq;
+use common_meta_app::schema::ListTableLockRevReq;
 use common_meta_app::schema::ListTableReq;
 use common_meta_app::schema::RenameDatabaseReq;
 use common_meta_app::schema::RenameTableReq;
@@ -259,6 +269,8 @@ impl SchemaApiTestSuite {
         suite
             .update_table_with_copied_files(&b.build().await)
             .await?;
+        suite.index_create_list_drop(&b.build().await).await?;
+        suite.table_lock_revision(&b.build().await).await?;
         Ok(())
     }
 
@@ -3299,7 +3311,7 @@ impl SchemaApiTestSuite {
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn truncate_table<MT: SchemaApi>(&self, mt: &MT) -> anyhow::Result<()> {
-        let mut util = Util::new(mt, "tenant1", "db1", "tb2");
+        let mut util = Util::new(mt, "tenant1", "db1", "tb2", "JSON");
         let table_id;
 
         info!("--- prepare db and table");
@@ -3654,6 +3666,275 @@ impl SchemaApiTestSuite {
                 assert_eq!(Some(&"t1".to_string()), res[0].2.options.get("name"));
                 assert_eq!(Some(&"t2".to_string()), res[1].2.options.get("name"));
             }
+        }
+
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn index_create_list_drop<MT: SchemaApi>(&self, mt: &MT) -> anyhow::Result<()> {
+        let tenant = "tenant1";
+
+        let mut util = Util::new(mt, tenant, "db1", "tb1", "eng1");
+        let table_id;
+        let index_id;
+
+        info!("--- prepare db and table");
+        {
+            util.create_db().await?;
+            let (tid, _table_meta) = util.create_table().await?;
+            table_id = tid;
+        }
+
+        let created_on = Utc::now();
+
+        let index_name_1 = "idx1";
+        let index_meta_1 = IndexMeta {
+            table_id,
+            index_type: IndexType::AGGREGATING,
+            created_on,
+            drop_on: None,
+            query: "SELECT a, SUM(b) FROM tb1 WHERE a > 1 GROUP BY b".to_string(),
+        };
+
+        let index_name_2 = "idx2";
+        let index_meta_2 = IndexMeta {
+            table_id,
+            index_type: IndexType::AGGREGATING,
+            created_on,
+            drop_on: None,
+            query: "SELECT a, SUM(b) FROM tb1 WHERE b > 1 GROUP BY b".to_string(),
+        };
+
+        let name_ident_1 = IndexNameIdent {
+            tenant: tenant.to_string(),
+            index_name: index_name_1.to_string(),
+        };
+
+        let name_ident_2 = IndexNameIdent {
+            tenant: tenant.to_string(),
+            index_name: index_name_2.to_string(),
+        };
+
+        {
+            info!("--- list index with no create before");
+            let req = ListIndexesReq {
+                tenant: tenant.to_string(),
+                table_id: Some(table_id),
+            };
+
+            let res = mt.list_indexes(req).await?;
+            assert!(res.is_empty())
+        }
+
+        {
+            info!("--- create index");
+            let req = CreateIndexReq {
+                if_not_exists: false,
+                name_ident: name_ident_1.clone(),
+                meta: index_meta_1.clone(),
+            };
+
+            let res = mt.create_index(req).await?;
+            index_id = res.index_id;
+
+            let req = CreateIndexReq {
+                if_not_exists: false,
+                name_ident: name_ident_2.clone(),
+                meta: index_meta_2.clone(),
+            };
+
+            mt.create_index(req).await?;
+        }
+
+        {
+            info!("--- create index again with if_not_exists = false");
+            let req = CreateIndexReq {
+                if_not_exists: false,
+                name_ident: name_ident_1.clone(),
+                meta: index_meta_1.clone(),
+            };
+
+            let res = mt.create_index(req).await;
+            let status = res.err().unwrap();
+            let err_code = ErrorCode::from(status);
+
+            assert_eq!(ErrorCode::IndexAlreadyExists("").code(), err_code.code());
+        }
+
+        {
+            info!("--- create index again with if_not_exists = true");
+            let req = CreateIndexReq {
+                if_not_exists: true,
+                name_ident: name_ident_1.clone(),
+                meta: index_meta_1.clone(),
+            };
+
+            let res = mt.create_index(req).await?;
+            assert_eq!(index_id, res.index_id);
+        }
+
+        {
+            info!("--- list index");
+            let req = ListIndexesReq {
+                tenant: tenant.to_string(),
+                table_id: None,
+            };
+
+            let res = mt.list_indexes(req).await?;
+            assert_eq!(2, res.len());
+
+            let req = ListIndexesReq {
+                tenant: tenant.to_string(),
+                table_id: Some(u64::MAX),
+            };
+
+            let res = mt.list_indexes(req).await?;
+            assert!(res.is_empty())
+        }
+
+        {
+            info!("--- drop index");
+            let req = DropIndexReq {
+                if_exists: false,
+                name_ident: name_ident_2.clone(),
+            };
+
+            let res = mt.drop_index(req).await;
+            assert!(res.is_ok())
+        }
+
+        {
+            info!("--- list index after drop one");
+            let req = ListIndexesReq {
+                tenant: tenant.to_string(),
+                table_id: Some(table_id),
+            };
+
+            let res = mt.list_indexes(req).await?;
+            assert_eq!(1, res.len());
+        }
+
+        {
+            info!("--- check list index content");
+            let req = ListIndexesReq {
+                tenant: tenant.to_string(),
+                table_id: Some(table_id),
+            };
+
+            let res = mt.list_indexes(req).await?;
+            assert_eq!(1, res.len());
+            assert_eq!(
+                vec![(index_id, index_name_1.to_string(), index_meta_1.clone())],
+                res
+            );
+        }
+
+        {
+            info!("--- list index after drop all");
+            let req = DropIndexReq {
+                if_exists: false,
+                name_ident: name_ident_1.clone(),
+            };
+
+            let res = mt.drop_index(req).await;
+            assert!(res.is_ok());
+
+            let req = ListIndexesReq {
+                tenant: tenant.to_string(),
+                table_id: Some(table_id),
+            };
+
+            let res = mt.list_indexes(req).await?;
+            assert!(res.is_empty())
+        }
+
+        {
+            info!("--- drop index with if exists = false");
+            let req = DropIndexReq {
+                if_exists: false,
+                name_ident: name_ident_1.clone(),
+            };
+
+            let res = mt.drop_index(req).await;
+            assert!(res.is_err())
+        }
+
+        {
+            info!("--- drop index with if exists = true");
+            let req = DropIndexReq {
+                if_exists: true,
+                name_ident: name_ident_1.clone(),
+            };
+
+            let res = mt.drop_index(req).await;
+            assert!(res.is_ok())
+        }
+
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn table_lock_revision<MT: SchemaApi>(&self, mt: &MT) -> anyhow::Result<()> {
+        let mut util = Util::new(mt, "tenant1", "db1", "tb1", "eng1");
+        let table_id;
+
+        info!("--- prepare db and table");
+        {
+            util.create_db().await?;
+            let (tid, _table_meta) = util.create_table().await?;
+            table_id = tid;
+        }
+
+        {
+            info!("--- create table lock revision 1");
+            let req1 = CreateTableLockRevReq {
+                table_id,
+                expire_at: (Utc::now().timestamp() + 2) as u64,
+            };
+            let res1 = mt.create_table_lock_rev(req1).await?;
+
+            info!("--- create table lock revision 2");
+            let req2 = CreateTableLockRevReq {
+                table_id,
+                expire_at: (Utc::now().timestamp() + 2) as u64,
+            };
+            let res2 = mt.create_table_lock_rev(req2).await?;
+            assert!(res2.revision > res1.revision);
+
+            info!("--- list table lock revisiosn");
+            let req3 = ListTableLockRevReq { table_id };
+            let res3 = mt.list_table_lock_revs(req3).await?;
+            assert_eq!(res3.len(), 2);
+            assert_eq!(res3[0], res1.revision);
+            assert_eq!(res3[1], res2.revision);
+
+            info!("--- extend table lock revision 2 expire");
+            let req4 = ExtendTableLockRevReq {
+                table_id,
+                expire_at: (Utc::now().timestamp() + 4) as u64,
+                revision: res2.revision,
+            };
+            mt.extend_table_lock_rev(req4).await?;
+
+            info!("--- table lock revision 1 retired");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let req5 = ListTableLockRevReq { table_id };
+            let res5 = mt.list_table_lock_revs(req5).await?;
+            assert_eq!(res5.len(), 1);
+            assert_eq!(res5[0], res2.revision);
+
+            info!("--- delete table lock revision 2");
+            let req6 = DeleteTableLockRevReq {
+                table_id,
+                revision: res2.revision,
+            };
+            mt.delete_table_lock_rev(req6).await?;
+
+            info!("--- check table locks is empty");
+            let req7 = ListTableLockRevReq { table_id };
+            let res7 = mt.list_table_lock_revs(req7).await?;
+            assert_eq!(res7.len(), 0);
         }
 
         Ok(())
@@ -4299,6 +4580,7 @@ where MT: SchemaApi
     tenant: String,
     db_name: String,
     table_name: String,
+    engine: String,
     created_on: DateTime<Utc>,
     table_id: u64,
     mt: &'a MT,
@@ -4313,11 +4595,13 @@ where MT: SchemaApi
         tenant: impl ToString,
         db_name: impl ToString,
         tbl_name: impl ToString,
+        engine: impl ToString,
     ) -> Self {
         Self {
             tenant: tenant.to_string(),
             db_name: db_name.to_string(),
             table_name: tbl_name.to_string(),
+            engine: engine.to_string(),
             created_on: Utc::now(),
             table_id: 0,
             mt,
@@ -4335,6 +4619,10 @@ where MT: SchemaApi
         self.table_name.clone()
     }
 
+    fn engine(&self) -> String {
+        self.engine.clone()
+    }
+
     fn schema(&self) -> Arc<TableSchema> {
         Arc::new(TableSchema::new(vec![TableField::new(
             "number",
@@ -4349,7 +4637,7 @@ where MT: SchemaApi
     fn table_meta(&self) -> TableMeta {
         TableMeta {
             schema: self.schema(),
-            engine: "JSON".to_string(),
+            engine: self.engine(),
             options: self.options(),
             created_on: self.created_on,
             ..TableMeta::default()
@@ -4364,7 +4652,7 @@ where MT: SchemaApi
                 db_name: self.db_name(),
             },
             meta: DatabaseMeta {
-                engine: "".to_string(),
+                engine: self.engine(),
                 ..DatabaseMeta::default()
             },
         };

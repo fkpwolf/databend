@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use common_base::base::tokio::sync::Semaphore;
 use common_base::runtime::Runtime;
+use common_base::runtime::TrySpawn;
 use common_catalog::plan::PushDownInfo;
 use common_catalog::table_context::TableContext;
+use common_exception::ErrorCode;
 use common_exception::Result;
 use common_expression::RemoteExpr;
 use common_expression::TableSchemaRef;
+use common_expression::SEGMENT_NAME_COL_NAME;
 use common_functions::BUILTIN_FUNCTIONS;
+use common_sql::field_default_value;
 use opendal::Operator;
 use storages_common_pruner::BlockMetaIndex;
 use storages_common_pruner::InternalColumnPruner;
@@ -35,14 +38,16 @@ use storages_common_pruner::RangePrunerCreator;
 use storages_common_pruner::TopNPrunner;
 use storages_common_table_meta::meta::BlockMeta;
 use storages_common_table_meta::meta::ClusterKey;
-use storages_common_table_meta::meta::Location;
+use storages_common_table_meta::meta::ColumnStatistics;
+use storages_common_table_meta::meta::StatisticsOfColumns;
 use tracing::warn;
 
-use super::create_segment_location_vector;
+use crate::pruning::segment_pruner::SegmentPruner;
+use crate::pruning::BlockPruner;
 use crate::pruning::BloomPruner;
 use crate::pruning::BloomPrunerCreator;
 use crate::pruning::FusePruningStatistics;
-use crate::pruning::SegmentPruner;
+use crate::pruning::SegmentLocation;
 
 pub struct PruningContext {
     pub ctx: Arc<dyn TableContext>,
@@ -60,6 +65,7 @@ pub struct PruningContext {
 }
 
 pub struct FusePruner {
+    max_concurrency: usize,
     pub table_schema: TableSchemaRef,
     pub pruning_ctx: Arc<PruningContext>,
     pub push_down: Option<PushDownInfo>,
@@ -100,10 +106,34 @@ impl FusePruner {
         // prepare the limiter. in case that limit is none, an unlimited limiter will be returned
         let limit_pruner = LimiterPrunerCreator::create(limit);
 
+        let default_stats: StatisticsOfColumns = filter_expr
+            .as_ref()
+            .map(|f| f.column_refs())
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, _)| {
+                let field = table_schema.field_with_name(&name).ok()?;
+                let default_scalar = field_default_value(ctx.clone(), field).ok()?;
+
+                let stats = ColumnStatistics {
+                    min: default_scalar.clone(),
+                    max: default_scalar,
+                    null_count: 0,
+                    in_memory_size: 0,
+                    distinct_of_values: Some(1),
+                };
+                Some((field.column_id(), stats))
+            })
+            .collect();
+
         // Range filter.
         // if filter_expression is none, an dummy pruner will be returned, which prunes nothing
-        let range_pruner =
-            RangePrunerCreator::try_create(func_ctx.clone(), &table_schema, filter_expr.as_ref())?;
+        let range_pruner = RangePrunerCreator::try_create_with_default_stats(
+            func_ctx.clone(),
+            &table_schema,
+            filter_expr.as_ref(),
+            default_stats,
+        )?;
 
         // Bloom pruner.
         // None will be returned, if filter is not applicable (e.g. unsuitable filter expression, index not available, etc.)
@@ -165,6 +195,7 @@ impl FusePruner {
         });
 
         Ok(FusePruner {
+            max_concurrency,
             table_schema,
             push_down: push_down.clone(),
             pruning_ctx,
@@ -176,21 +207,67 @@ impl FusePruner {
     #[async_backtrace::framed]
     pub async fn pruning(
         &self,
-        segment_locs: Vec<Location>,
-        snapshot_loc: Option<String>,
-        segment_id_map: Option<HashMap<Location, usize>>,
+        mut segment_locs: Vec<SegmentLocation>,
     ) -> Result<Vec<(BlockMetaIndex, Arc<BlockMeta>)>> {
-        let segment_locs =
-            create_segment_location_vector(segment_locs, snapshot_loc, segment_id_map);
-
         // Segment pruner.
         let segment_pruner =
             SegmentPruner::create(self.pruning_ctx.clone(), self.table_schema.clone())?;
+        let block_pruner = Arc::new(BlockPruner::create(self.pruning_ctx.clone())?);
 
-        let metas = segment_pruner.pruning(segment_locs).await?;
+        let mut remain = segment_locs.len() % self.max_concurrency;
+        let batch_size = segment_locs.len() / self.max_concurrency;
+        let mut works = Vec::with_capacity(self.max_concurrency);
 
-        // TopN pruner.
-        self.topn_pruning(metas)
+        while !segment_locs.is_empty() {
+            let gap_size = std::cmp::min(1, remain);
+            let batch_size = batch_size + gap_size;
+            remain -= gap_size;
+
+            let mut batch = segment_locs.drain(0..batch_size).collect::<Vec<_>>();
+
+            works.push(self.pruning_ctx.pruning_runtime.spawn({
+                let block_pruner = block_pruner.clone();
+                let segment_pruner = segment_pruner.clone();
+                let pruning_ctx = self.pruning_ctx.clone();
+
+                async move {
+                    // Build pruning tasks.
+                    if let Some(internal_column_pruner) = &pruning_ctx.internal_column_pruner {
+                        batch = batch
+                            .into_iter()
+                            .filter(|segment| {
+                                internal_column_pruner
+                                    .should_keep(SEGMENT_NAME_COL_NAME, &segment.location.0)
+                            })
+                            .collect::<Vec<_>>();
+                    }
+
+                    let mut res = vec![];
+                    let pruned_segments = segment_pruner.pruning(batch).await?;
+                    for (location, info) in pruned_segments {
+                        res.extend(block_pruner.pruning(location, &info).await?);
+                    }
+
+                    Result::<_, ErrorCode>::Ok(res)
+                }
+            }));
+        }
+
+        match futures::future::try_join_all(works).await {
+            Err(e) => Err(ErrorCode::StorageOther(format!(
+                "segment pruning failure, {}",
+                e
+            ))),
+            Ok(workers) => {
+                let mut metas = vec![];
+                for worker in workers {
+                    metas.extend(worker?);
+                }
+
+                // TopN pruner.
+                self.topn_pruning(metas)
+            }
+        }
     }
 
     // topn pruner:

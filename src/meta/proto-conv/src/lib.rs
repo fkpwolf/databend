@@ -61,10 +61,12 @@
 //! - `message.MIN_READER_VER` is the minimal reader(program) version that can read this message.
 
 mod config_from_to_protobuf_impl;
+mod data_mask_from_to_protobuf_impl;
 mod database_from_to_protobuf_impl;
 mod datetime_from_to_protobuf_impl;
 mod file_format_from_to_protobuf_impl;
 mod from_to_protobuf;
+mod index_from_to_protobuf_impl;
 mod schema_from_to_protobuf_impl;
 mod share_from_to_protobuf_impl;
 mod stage_from_to_protobuf_impl;

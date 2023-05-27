@@ -22,13 +22,21 @@ use common_meta_app::schema::CountTablesReply;
 use common_meta_app::schema::CountTablesReq;
 use common_meta_app::schema::CreateDatabaseReply;
 use common_meta_app::schema::CreateDatabaseReq;
+use common_meta_app::schema::CreateIndexReply;
+use common_meta_app::schema::CreateIndexReq;
+use common_meta_app::schema::CreateTableLockRevReply;
+use common_meta_app::schema::CreateTableReply;
 use common_meta_app::schema::CreateTableReq;
 use common_meta_app::schema::DropDatabaseReply;
 use common_meta_app::schema::DropDatabaseReq;
+use common_meta_app::schema::DropIndexReply;
+use common_meta_app::schema::DropIndexReq;
 use common_meta_app::schema::DropTableByIdReq;
 use common_meta_app::schema::DropTableReply;
 use common_meta_app::schema::GetTableCopiedFileReply;
 use common_meta_app::schema::GetTableCopiedFileReq;
+use common_meta_app::schema::IndexMeta;
+use common_meta_app::schema::ListIndexesReq;
 use common_meta_app::schema::RenameDatabaseReply;
 use common_meta_app::schema::RenameDatabaseReq;
 use common_meta_app::schema::RenameTableReply;
@@ -172,7 +180,7 @@ impl Catalog for ImmutableCatalog {
     }
 
     #[async_backtrace::framed]
-    async fn create_table(&self, _req: CreateTableReq) -> Result<()> {
+    async fn create_table(&self, _req: CreateTableReq) -> Result<CreateTableReply> {
         Err(ErrorCode::Unimplemented(
             "Cannot create table in system database",
         ))
@@ -261,5 +269,59 @@ impl Catalog for ImmutableCatalog {
             "update table meta not allowed for system database {:?}",
             req
         )))
+    }
+
+    #[async_backtrace::framed]
+    async fn list_table_lock_revs(&self, _table_id: u64) -> Result<Vec<u64>> {
+        Err(ErrorCode::Unimplemented(
+            "list_table_lock_revs not allowed for system database",
+        ))
+    }
+
+    #[async_backtrace::framed]
+    async fn create_table_lock_rev(
+        &self,
+        _expire_sec: u64,
+        _table_info: &TableInfo,
+    ) -> Result<CreateTableLockRevReply> {
+        Err(ErrorCode::Unimplemented(
+            "create_table_lock_rev not allowed for system database",
+        ))
+    }
+
+    #[async_backtrace::framed]
+    async fn extend_table_lock_rev(
+        &self,
+        _expire_sec: u64,
+        _table_info: &TableInfo,
+        _revision: u64,
+    ) -> Result<()> {
+        Err(ErrorCode::Unimplemented(
+            "extend_table_lock_rev not allowed for system database",
+        ))
+    }
+
+    #[async_backtrace::framed]
+    async fn delete_table_lock_rev(&self, _table_info: &TableInfo, _revision: u64) -> Result<()> {
+        Err(ErrorCode::Unimplemented(
+            "delete_table_lock_rev not allowed for system database",
+        ))
+    }
+
+    // Table index
+
+    #[async_backtrace::framed]
+    async fn create_index(&self, _req: CreateIndexReq) -> Result<CreateIndexReply> {
+        unimplemented!()
+    }
+
+    #[async_backtrace::framed]
+    async fn drop_index(&self, _req: DropIndexReq) -> Result<DropIndexReply> {
+        unimplemented!()
+    }
+
+    #[async_backtrace::framed]
+    async fn list_indexes(&self, _req: ListIndexesReq) -> Result<Vec<(u64, String, IndexMeta)>> {
+        unimplemented!()
     }
 }

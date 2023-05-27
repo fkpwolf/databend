@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use common_exception::Result;
 
 use crate::optimizer::SExpr;
@@ -31,8 +33,10 @@ pub fn outer_to_inner(s_expr: &SExpr) -> Result<SExpr> {
         use crate::plans::JoinType;
 
         let mut join = join;
-        let filter: Filter = s_expr.plan().clone().try_into()?;
-        if let Some(constraint_set) = crate::optimizer::ConstraintSet::new(&filter.predicates) {
+        let mut filter: Filter = s_expr.plan().clone().try_into()?;
+        if let Some(mut constraint_set) =
+            crate::optimizer::ConstraintSet::new(&mut filter.predicates)
+        {
             let join_expr = RelExpr::with_s_expr(s_expr.child(0)?);
             let left_columns = join_expr.derive_relational_prop_child(0)?.output_columns;
             let right_columns = join_expr.derive_relational_prop_child(1)?.output_columns;
@@ -75,12 +79,12 @@ pub fn outer_to_inner(s_expr: &SExpr) -> Result<SExpr> {
 
             join.join_type = new_join_type;
             Ok(SExpr::create_unary(
-                filter.into(),
-                SExpr::create_binary(
-                    join.into(),
-                    s_expr.child(0)?.child(0)?.clone(),
-                    s_expr.child(0)?.child(1)?.clone(),
-                ),
+                Arc::new(filter.into()),
+                Arc::new(SExpr::create_binary(
+                    Arc::new(join.into()),
+                    Arc::new(s_expr.child(0)?.child(0)?.clone()),
+                    Arc::new(s_expr.child(0)?.child(1)?.clone()),
+                )),
             ))
         } else {
             Ok(s_expr.clone())

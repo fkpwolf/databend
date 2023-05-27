@@ -25,7 +25,6 @@ use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 use common_sql::plans::Join;
 use common_sql::plans::Scan;
-use common_sql::plans::Statistics;
 use databend_query::sql::optimizer::SExpr;
 use databend_query::sql::planner::plans::JoinType;
 use databend_query::sql::planner::Metadata;
@@ -102,100 +101,88 @@ fn test_format() {
     );
 
     let s_expr = SExpr::create_binary(
-        Join {
-            right_conditions: vec![
-                FunctionCall {
-                    span: None,
-                    func_name: "plus".to_string(),
-                    params: vec![],
-                    arguments: vec![
-                        BoundColumnRef {
-                            span: None,
-                            column: ColumnBinding {
-                                database_name: None,
-                                table_name: None,
-                                table_index: None,
-                                column_name: "col1".to_string(),
-                                index: col1,
-                                data_type: Box::new(DataType::Boolean),
-                                visibility: Visibility::Visible,
-                            },
-                        }
-                        .into(),
-                        ConstantExpr {
-                            span: None,
-                            value: Scalar::Number(NumberScalar::UInt64(123u64)),
-                        }
-                        .into(),
-                    ],
-                }
-                .into(),
-            ],
-            left_conditions: vec![
-                BoundColumnRef {
-                    span: None,
-                    column: ColumnBinding {
-                        database_name: None,
-                        table_name: None,
-                        table_index: None,
-                        column_name: "col2".to_string(),
-                        index: col2,
-                        data_type: Box::new(DataType::Boolean),
-                        visibility: Visibility::Visible,
-                    },
-                }
-                .into(),
-            ],
-            non_equi_conditions: vec![],
-            join_type: JoinType::Inner,
-            marker_index: None,
-            from_correlated_subquery: false,
-            contain_runtime_filter: false,
-        }
-        .into(),
-        SExpr::create_unary(
-            Filter {
-                predicates: vec![
-                    ConstantExpr {
+        Arc::new(
+            Join {
+                right_conditions: vec![
+                    FunctionCall {
                         span: None,
-                        value: Scalar::Boolean(true),
+                        func_name: "plus".to_string(),
+                        params: vec![],
+                        arguments: vec![
+                            BoundColumnRef {
+                                span: None,
+                                column: ColumnBinding {
+                                    database_name: None,
+                                    table_name: None,
+                                    table_index: None,
+                                    column_name: "col1".to_string(),
+                                    index: col1,
+                                    data_type: Box::new(DataType::Boolean),
+                                    visibility: Visibility::Visible,
+                                },
+                            }
+                            .into(),
+                            ConstantExpr {
+                                span: None,
+                                value: Scalar::Number(NumberScalar::UInt64(123u64)),
+                            }
+                            .into(),
+                        ],
                     }
                     .into(),
                 ],
-                is_having: false,
+                left_conditions: vec![
+                    BoundColumnRef {
+                        span: None,
+                        column: ColumnBinding {
+                            database_name: None,
+                            table_name: None,
+                            table_index: None,
+                            column_name: "col2".to_string(),
+                            index: col2,
+                            data_type: Box::new(DataType::Boolean),
+                            visibility: Visibility::Visible,
+                        },
+                    }
+                    .into(),
+                ],
+                non_equi_conditions: vec![],
+                join_type: JoinType::Inner,
+                marker_index: None,
+                from_correlated_subquery: false,
+                contain_runtime_filter: false,
             }
             .into(),
-            SExpr::create_leaf(
-                Scan {
-                    table_index: tab1,
-                    columns: Default::default(),
-                    push_down_predicates: None,
-                    limit: None,
-                    order_by: None,
-                    prewhere: None,
-                    statistics: Statistics {
-                        statistics: None,
-                        col_stats: Default::default(),
-                    },
+        ),
+        Arc::new(SExpr::create_unary(
+            Arc::new(
+                Filter {
+                    predicates: vec![
+                        ConstantExpr {
+                            span: None,
+                            value: Scalar::Boolean(true),
+                        }
+                        .into(),
+                    ],
+                    is_having: false,
                 }
                 .into(),
             ),
-        ),
-        SExpr::create_leaf(
+            Arc::new(SExpr::create_leaf(Arc::new(
+                Scan {
+                    table_index: tab1,
+                    ..Default::default()
+                }
+                .into(),
+            ))),
+        )),
+        Arc::new(SExpr::create_leaf(Arc::new(
             Scan {
                 table_index: tab1,
-                columns: Default::default(),
-                push_down_predicates: None,
-                limit: None,
-                order_by: None,
-                prewhere: None,
-                statistics: Statistics {
-                    statistics: None,
-                    col_stats: Default::default(),
-                },
+                ..Default::default()
             }
             .into(),
-        ),
+        ))),
     );
 
     let metadata_ref = Arc::new(RwLock::new(metadata));

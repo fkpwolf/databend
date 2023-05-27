@@ -32,6 +32,7 @@ use nom::Slice;
 
 use crate::ast::*;
 use crate::input::Input;
+use crate::parser::data_mask::data_mask_policy;
 use crate::parser::expr::subexpr;
 use crate::parser::expr::*;
 use crate::parser::query::*;
@@ -199,6 +200,7 @@ pub fn statement(i: Input) -> IResult<StatementMsg> {
         },
         |(_, _, limit)| Statement::ShowTableFunctions { limit },
     );
+    let show_indexes = value(Statement::ShowIndexes, rule! { SHOW ~ INDEXES });
 
     // kill query 199;
     let kill_stmt = map(
@@ -689,6 +691,35 @@ pub fn statement(i: Input) -> IResult<StatementMsg> {
             })
         },
     );
+
+    let create_index = map(
+        rule! {
+            CREATE ~ AGGREGATING ~ INDEX ~ ( IF ~ NOT ~ EXISTS )?
+            ~ #ident
+            ~ AS ~ #query
+        },
+        |(_, _, _, opt_if_not_exists, index_name, _, query)| {
+            Statement::CreateIndex(CreateIndexStmt {
+                index_type: TableIndexType::Aggregating,
+                if_not_exists: opt_if_not_exists.is_some(),
+                index_name,
+                query: Box::new(query),
+            })
+        },
+    );
+
+    let drop_index = map(
+        rule! {
+            DROP ~ AGGREGATING ~ INDEX ~ ( IF ~ EXISTS )? ~ #ident
+        },
+        |(_, _, _, opt_if_exists, index)| {
+            Statement::DropIndex(DropIndexStmt {
+                if_exists: opt_if_exists.is_some(),
+                index,
+            })
+        },
+    );
+
     let show_users = value(Statement::ShowUsers, rule! { SHOW ~ USERS });
     let create_user = map(
         rule! {
@@ -1143,6 +1174,43 @@ pub fn statement(i: Input) -> IResult<StatementMsg> {
 
     let show_file_formats = value(Statement::ShowFileFormats, rule! { SHOW ~ FILE ~ FORMATS });
 
+    // data mark policy
+    let create_data_mask_policy = map(
+        rule! {
+            CREATE ~ MASKING ~ POLICY ~ ( IF ~ NOT ~ EXISTS )? ~ #ident ~ #data_mask_policy
+        },
+        |(_, _, _, opt_if_not_exists, name, policy)| {
+            let stmt = CreateDatamaskPolicyStmt {
+                if_not_exists: opt_if_not_exists.is_some(),
+                name: name.to_string(),
+                policy,
+            };
+            Statement::CreateDatamaskPolicy(stmt)
+        },
+    );
+    let drop_data_mask_policy = map(
+        rule! {
+            DROP ~ MASKING ~ POLICY ~ ( IF ~ EXISTS )? ~ #ident
+        },
+        |(_, _, _, opt_if_exists, name)| {
+            let stmt = DropDatamaskPolicyStmt {
+                if_exists: opt_if_exists.is_some(),
+                name: name.to_string(),
+            };
+            Statement::DropDatamaskPolicy(stmt)
+        },
+    );
+    let describe_data_mask_policy = map(
+        rule! {
+            ( DESC | DESCRIBE ) ~ MASKING ~ POLICY ~ #ident
+        },
+        |(_, _, _, name)| {
+            Statement::DescDatamaskPolicy(DescDatamaskPolicyStmt {
+                name: name.to_string(),
+            })
+        },
+    );
+
     let statement_body = alt((
         rule!(
             #map(query, |query| Statement::Query(Box::new(query)))
@@ -1156,6 +1224,7 @@ pub fn statement(i: Input) -> IResult<StatementMsg> {
             | #show_process_list : "`SHOW PROCESSLIST`"
             | #show_metrics : "`SHOW METRICS`"
             | #show_functions : "`SHOW FUNCTIONS [<show_limit>]`"
+            | #show_indexes : "`SHOW INDEXES`"
             | #kill_stmt : "`KILL (QUERY | CONNECTION) <object_id>`"
             | #set_role: "`SET [DEFAULT] ROLE <role>`"
             | #show_databases : "`SHOW [FULL] DATABASES [(FROM | IN) <catalog>] [<show_limit>]`"
@@ -1197,6 +1266,10 @@ pub fn statement(i: Input) -> IResult<StatementMsg> {
             #create_view : "`CREATE VIEW [IF NOT EXISTS] [<database>.]<view> [(<column>, ...)] AS SELECT ...`"
             | #drop_view : "`DROP VIEW [IF EXISTS] [<database>.]<view>`"
             | #alter_view : "`ALTER VIEW [<database>.]<view> [(<column>, ...)] AS SELECT ...`"
+        ),
+        rule!(
+            #create_index: "`CREATE AGGREGATING INDEX [IF NOT EXISTS] <index> AS SELECT ...`"
+            | #drop_index: "`DROP AGGREGATING INDEX [IF EXISTS] <index>`"
         ),
         rule!(
             #show_users : "`SHOW USERS`"
@@ -1245,6 +1318,12 @@ pub fn statement(i: Input) -> IResult<StatementMsg> {
         ),
         rule!(
             #presign: "`PRESIGN [{DOWNLOAD | UPLOAD}] <location> [EXPIRE = 3600]`"
+        ),
+        // data mask
+        rule!(
+            #create_data_mask_policy: "`CREATE MASKING POLICY [IF NOT EXISTS] mask_name as (val1 val_type1 [, val type]) return type -> case`"
+            | #drop_data_mask_policy: "`DROP MASKING POLICY [IF EXISTS] mask_name`"
+            | #describe_data_mask_policy: "`DESC MASKING POLICY mask_name`"
         ),
         // share
         rule!(

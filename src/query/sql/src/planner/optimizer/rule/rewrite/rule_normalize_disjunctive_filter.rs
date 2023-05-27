@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use common_exception::Result;
-use common_expression::types::DataType;
 use common_expression::Scalar;
 
 use crate::binder::split_conjunctions;
@@ -51,15 +52,12 @@ fn predicate_scalar(scalar: &ScalarExpr) -> PredicateScalar {
     }
 }
 
-fn normalize_predicate_scalar(
-    predicate_scalar: PredicateScalar,
-    return_type: DataType,
-) -> ScalarExpr {
+fn normalize_predicate_scalar(predicate_scalar: PredicateScalar) -> ScalarExpr {
     match predicate_scalar {
         PredicateScalar::And { args } => {
             assert!(args.len() >= 2);
             args.into_iter()
-                .map(|arg| normalize_predicate_scalar(arg, return_type.clone()))
+                .map(normalize_predicate_scalar)
                 .reduce(|lhs, rhs| {
                     ScalarExpr::FunctionCall(FunctionCall {
                         span: None,
@@ -73,7 +71,7 @@ fn normalize_predicate_scalar(
         PredicateScalar::Or { args } => {
             assert!(args.len() >= 2);
             args.into_iter()
-                .map(|arg| normalize_predicate_scalar(arg, return_type.clone()))
+                .map(normalize_predicate_scalar)
                 .reduce(|lhs, rhs| {
                     ScalarExpr::FunctionCall(FunctionCall {
                         span: None,
@@ -104,16 +102,18 @@ impl RuleNormalizeDisjunctiveFilter {
             //  \
             //   *
             patterns: vec![SExpr::create_unary(
-                PatternPlan {
-                    plan_type: RelOp::Filter,
-                }
-                .into(),
-                SExpr::create_leaf(
+                Arc::new(
+                    PatternPlan {
+                        plan_type: RelOp::Filter,
+                    }
+                    .into(),
+                ),
+                Arc::new(SExpr::create_leaf(Arc::new(
                     PatternPlan {
                         plan_type: RelOp::Pattern,
                     }
                     .into(),
-                ),
+                ))),
             )],
         }
     }
@@ -136,10 +136,7 @@ impl Rule for RuleNormalizeDisjunctiveFilter {
             if has_rewritten {
                 rewritten = true;
             }
-            rewritten_predicates.push(normalize_predicate_scalar(
-                rewritten_predicate_scalar,
-                predicate.data_type()?,
-            ));
+            rewritten_predicates.push(normalize_predicate_scalar(rewritten_predicate_scalar));
         }
         let mut split_predicates: Vec<ScalarExpr> = Vec::with_capacity(rewritten_predicates.len());
         for predicate in rewritten_predicates.iter() {
@@ -147,12 +144,14 @@ impl Rule for RuleNormalizeDisjunctiveFilter {
         }
         if rewritten {
             state.add_result(SExpr::create_unary(
-                Filter {
-                    predicates: split_predicates,
-                    is_having: filter.is_having,
-                }
-                .into(),
-                s_expr.child(0)?.clone(),
+                Arc::new(
+                    Filter {
+                        predicates: split_predicates,
+                        is_having: filter.is_having,
+                    }
+                    .into(),
+                ),
+                Arc::new(s_expr.child(0)?.clone()),
             ));
         }
         Ok(())

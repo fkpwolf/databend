@@ -90,6 +90,7 @@ use crate::BindContext;
 use crate::ColumnBinding;
 use crate::ColumnEntry;
 use crate::MetadataRef;
+use crate::TypeCheck;
 use crate::Visibility;
 
 /// A helper for type checking.
@@ -663,16 +664,12 @@ impl<'a> TypeChecker<'a> {
                             "window function {name} can only be used in window clause"
                         )));
                     }
-                    if !args.is_empty() {
-                        return Err(ErrorCode::SemanticError(format!(
-                            "window function {name} does not have any argument"
-                        )));
-                    }
+                    let func = self.resolve_general_window_function(&name, &args).await?;
                     let window = window.as_ref().unwrap();
                     // WindowReference already rewritten by `SelectRewriter` before.
                     let window = window.as_window_spec().unwrap();
                     let display_name = format!("{:#}", expr);
-                    let func = WindowFuncType::from_name(&name)?;
+
                     self.resolve_window(*span, display_name, window, func)
                         .await?
                 } else if AggregateFunctionFactory::instance().contains(&name) {
@@ -712,10 +709,10 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Expr::CountAll { .. } => {
+            Expr::CountAll { span, window } => {
                 let agg_func = AggregateCountFunction::try_create("", vec![], vec![])?;
 
-                Box::new((
+                let (new_agg_func, data_type) = (
                     AggregateFunction {
                         display_name: format!("{:#}", expr),
                         func_name: "count".to_string(),
@@ -723,10 +720,22 @@ impl<'a> TypeChecker<'a> {
                         params: vec![],
                         args: vec![],
                         return_type: Box::new(agg_func.return_type()?),
-                    }
-                    .into(),
+                    },
                     agg_func.return_type()?,
-                ))
+                );
+
+                if let Some(window) = window {
+                    // aggregate window function
+                    let display_name = format!("{:#}", expr);
+                    let func = WindowFuncType::Aggregate(new_agg_func);
+                    // WindowReference already rewritten by `SelectRewriter` before.
+                    let window = window.as_window_spec().unwrap();
+                    self.resolve_window(*span, display_name, window, func)
+                        .await?
+                } else {
+                    // aggregate function
+                    Box::new((new_agg_func.into(), data_type))
+                }
             }
 
             Expr::Exists { subquery, not, .. } => {
@@ -924,6 +933,7 @@ impl<'a> TypeChecker<'a> {
             .await?;
         let data_type = func.return_type();
         let window_func = WindowFunc {
+            span,
             display_name,
             func,
             partition_by: partitions,
@@ -1007,113 +1017,30 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[async_backtrace::framed]
-    async fn resolve_range_offset(
-        &mut self,
-        bound: &WindowFrameBound,
-    ) -> Result<Option<(ScalarExpr, DataType)>> {
+    async fn resolve_range_offset(&mut self, bound: &WindowFrameBound) -> Result<Option<Scalar>> {
         match bound {
             WindowFrameBound::Following(Some(box expr))
             | WindowFrameBound::Preceding(Some(box expr)) => {
-                let box (value, mut data_type) = self.resolve(expr).await?;
-                if matches!(
-                    data_type,
-                    DataType::Number(_)
-                        | DataType::Decimal(_)
-                        | DataType::Date
-                        | DataType::Timestamp
-                ) {
-                    // Make sure RANEG offset is number type.
-                    if data_type.is_decimal() {
-                        data_type = DataType::Number(NumberDataType::Float64)
-                    } else if data_type.is_date_or_date_time() {
-                        data_type = DataType::Number(NumberDataType::Int64)
-                    }
-                    return Ok(Some((value, data_type)));
+                let box (expr, _) = self.resolve(expr).await?;
+                let (expr, _) =
+                    ConstantFolder::fold(&expr.type_check()?, &self.func_ctx, &BUILTIN_FUNCTIONS);
+                if let common_expression::Expr::Constant { scalar, .. } = expr {
+                    Ok(Some(scalar))
+                } else {
+                    Err(ErrorCode::SemanticError(
+                        "Only constant is allowed in RANGE offset".to_string(),
+                    )
+                    .set_span(expr.span()))
                 }
-                Err(ErrorCode::SemanticError(
-                    "Only numbers are allowed in RANGE offset".to_string(),
-                )
-                .set_span(expr.span()))
             }
             _ => Ok(None),
         }
     }
 
     #[async_backtrace::framed]
-    async fn resolve_window_range_frame(
-        &mut self,
-        span: Span,
-        order_by: &mut WindowOrderBy,
-        frame: WindowFrame,
-    ) -> Result<WindowFuncFrame> {
-        let order_by_type = order_by.expr.data_type()?;
-        let is_nullable = order_by_type.is_nullable();
-        let mut common_type = order_by_type.remove_nullable();
+    async fn resolve_window_range_frame(&mut self, frame: WindowFrame) -> Result<WindowFuncFrame> {
         let start_offset = self.resolve_range_offset(&frame.start_bound).await?;
         let end_offset = self.resolve_range_offset(&frame.end_bound).await?;
-        if let Some((_, data_type)) = &start_offset {
-            common_type = type_check::common_super_type(
-                common_type.clone(),
-                data_type.clone(),
-                &BUILTIN_FUNCTIONS.default_cast_rules,
-            )
-            .ok_or_else(|| {
-                ErrorCode::SemanticError("Cannot unify ORDER BY and RANGE offset types".to_string())
-            })?;
-        }
-        if let Some((_, data_type)) = &end_offset {
-            common_type = type_check::common_super_type(
-                common_type.clone(),
-                data_type.clone(),
-                &BUILTIN_FUNCTIONS.default_cast_rules,
-            )
-            .ok_or_else(|| {
-                ErrorCode::SemanticError("Cannot unify ORDER BY and RANGE offset types".to_string())
-            })?;
-        }
-
-        // Unify ORDER BY and RANGE offsets types.
-        let start_offset = start_offset
-            .map(|(mut expr, _)| {
-                expr = wrap_cast(&expr, &common_type);
-                let expr = expr.as_expr()?;
-                let (expr, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
-                if let common_expression::Expr::Constant { scalar, .. } = expr {
-                    debug_assert!(matches!(scalar, Scalar::Number(_)));
-                    if scalar.is_positive() {
-                        return Ok(scalar);
-                    }
-                }
-                Err(ErrorCode::SemanticError(
-                    "Only positive numbers are allowed in RANGE offset".to_string(),
-                )
-                .set_span(span))
-            })
-            .transpose()?;
-        let end_offset = end_offset
-            .map(|(mut expr, _)| {
-                expr = wrap_cast(&expr, &common_type);
-                let expr = expr.as_expr()?.project_column_ref(|col| col.index);
-                let (expr, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
-                if let common_expression::Expr::Constant { scalar, .. } = expr {
-                    debug_assert!(matches!(scalar, Scalar::Number(_)));
-                    if scalar.is_positive() {
-                        return Ok(scalar);
-                    }
-                }
-                Err(ErrorCode::SemanticError(
-                    "Only positive numbers are allowed in RANGE offset".to_string(),
-                )
-                .set_span(span))
-            })
-            .transpose()?;
-
-        if is_nullable {
-            common_type = common_type.wrap_nullable();
-        }
-        if order_by_type != common_type {
-            order_by.expr = wrap_cast(&order_by.expr, &common_type);
-        }
 
         let units = match frame.units {
             WindowFrameUnits::Rows => WindowFuncFrameUnits::Rows,
@@ -1145,12 +1072,37 @@ impl<'a> TypeChecker<'a> {
         order_by: &mut [WindowOrderBy],
         window_frame: Option<WindowFrame>,
     ) -> Result<WindowFuncFrame> {
-        if matches!(func, WindowFuncType::PercentRank) {
-            return Ok(WindowFuncFrame {
-                units: WindowFuncFrameUnits::Rows,
-                start_bound: WindowFuncFrameBound::Preceding(None),
-                end_bound: WindowFuncFrameBound::Following(None),
-            });
+        match func {
+            WindowFuncType::PercentRank => {
+                return Ok(WindowFuncFrame {
+                    units: WindowFuncFrameUnits::Rows,
+                    start_bound: WindowFuncFrameBound::Preceding(None),
+                    end_bound: WindowFuncFrameBound::Following(None),
+                });
+            }
+            WindowFuncType::Lag(lag) => {
+                return Ok(WindowFuncFrame {
+                    units: WindowFuncFrameUnits::Rows,
+                    start_bound: WindowFuncFrameBound::Preceding(Some(Scalar::Number(
+                        NumberScalar::UInt64(lag.offset),
+                    ))),
+                    end_bound: WindowFuncFrameBound::Preceding(Some(Scalar::Number(
+                        NumberScalar::UInt64(lag.offset),
+                    ))),
+                });
+            }
+            WindowFuncType::Lead(lead) => {
+                return Ok(WindowFuncFrame {
+                    units: WindowFuncFrameUnits::Rows,
+                    start_bound: WindowFuncFrameBound::Following(Some(Scalar::Number(
+                        NumberScalar::UInt64(lead.offset),
+                    ))),
+                    end_bound: WindowFuncFrameBound::Following(Some(Scalar::Number(
+                        NumberScalar::UInt64(lead.offset),
+                    ))),
+                });
+            }
+            _ => {}
         }
         if let Some(frame) = window_frame {
             if frame.units.is_range() {
@@ -1160,8 +1112,7 @@ impl<'a> TypeChecker<'a> {
                         order_by.len()
                     )).set_span(span));
                 }
-                self.resolve_window_range_frame(span, &mut order_by[0], frame)
-                    .await
+                self.resolve_window_range_frame(frame).await
             } else {
                 self.resolve_window_rows_frame(frame)
             }
@@ -1178,6 +1129,127 @@ impl<'a> TypeChecker<'a> {
                 end_bound: WindowFuncFrameBound::CurrentRow,
             })
         }
+    }
+
+    /// Resolve general window function call.
+    #[async_backtrace::framed]
+    async fn resolve_general_window_function(
+        &mut self,
+        func_name: &str,
+        args: &[&Expr],
+    ) -> Result<WindowFuncType> {
+        // try to resolve window function without arguments first
+        if let Ok(window_func) = WindowFuncType::from_name(func_name) {
+            return Ok(window_func);
+        }
+
+        self.in_window_function = true;
+        let mut arguments = vec![];
+        let mut arg_types = vec![];
+        for arg in args.iter() {
+            let box (argument, arg_type) = self.resolve(arg).await?;
+            arguments.push(argument);
+            arg_types.push(arg_type);
+        }
+        self.in_window_function = false;
+
+        match func_name {
+            "lag" | "lead" => {
+                self.resolve_laglead_window_function(func_name, &arguments, &arg_types)
+                    .await
+            }
+            "first_value" | "first" | "last_value" | "last" => {
+                self.resolve_firstlast_window_function(func_name, &arguments, &arg_types)
+                    .await
+            }
+            _ => Err(ErrorCode::UnknownFunction(format!(
+                "Unknown window function: {func_name}"
+            ))),
+        }
+    }
+
+    #[async_backtrace::framed]
+    async fn resolve_laglead_window_function(
+        &mut self,
+        func_name: &str,
+        args: &[ScalarExpr],
+        arg_types: &[DataType],
+    ) -> Result<WindowFuncType> {
+        if args.is_empty() || args.len() > 3 {
+            return Err(ErrorCode::InvalidArgument(
+                "Argument number is invalid".to_string(),
+            ));
+        }
+
+        let offset = if args.len() >= 2 {
+            let off = ScalarExpr::CastExpr(CastExpr {
+                span: args[1].span(),
+                is_try: true,
+                argument: Box::new(args[1].clone()),
+                target_type: Box::new(DataType::Number(NumberDataType::UInt64)),
+            })
+            .as_expr()?;
+            Some(check_number::<_, u64>(
+                off.span(),
+                &self.func_ctx,
+                &off,
+                &BUILTIN_FUNCTIONS,
+            )?)
+        } else {
+            None
+        };
+
+        let default = if args.len() == 3 {
+            Some(args[2].clone())
+        } else {
+            None
+        };
+
+        let return_type = match default {
+            Some(_) => arg_types[0].clone(),
+            None => arg_types[0].wrap_nullable(),
+        };
+
+        let cast_default = default
+            .map(|d| match d.clone() {
+                ScalarExpr::BoundColumnRef(_)
+                | ScalarExpr::CastExpr(_)
+                | ScalarExpr::ConstantExpr(_) => Ok(ScalarExpr::CastExpr(CastExpr {
+                    span: d.span(),
+                    is_try: true,
+                    argument: Box::new(d),
+                    target_type: Box::new(return_type.clone()),
+                })),
+                _ => Err(ErrorCode::SemanticError(
+                    "default value just support literal value and column, or ignore it",
+                )),
+            })
+            .transpose()?;
+
+        WindowFuncType::get_general_window_func(
+            func_name,
+            args[0].clone(),
+            offset,
+            cast_default,
+            return_type,
+        )
+    }
+
+    #[async_backtrace::framed]
+    async fn resolve_firstlast_window_function(
+        &mut self,
+        func_name: &str,
+        args: &[ScalarExpr],
+        arg_types: &[DataType],
+    ) -> Result<WindowFuncType> {
+        if args.len() != 1 {
+            return Err(ErrorCode::InvalidArgument(
+                "Argument number is invalid".to_string(),
+            ));
+        }
+
+        let return_type = arg_types[0].wrap_nullable();
+        WindowFuncType::get_general_window_func(func_name, args[0].clone(), None, None, return_type)
     }
 
     /// Resolve aggregation function call.

@@ -13,17 +13,20 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_exception::Span;
 
 use super::select::SelectList;
 use crate::optimizer::SExpr;
 use crate::plans::AggregateFunction;
 use crate::plans::BoundColumnRef;
 use crate::plans::CastExpr;
-use crate::plans::EvalScalar;
+use crate::plans::FirstLastFunction;
 use crate::plans::FunctionCall;
+use crate::plans::LagLeadFunction;
 use crate::plans::ScalarExpr;
 use crate::plans::ScalarItem;
 use crate::plans::Window;
@@ -45,39 +48,20 @@ impl Binder {
         window_info: &WindowFunctionInfo,
         child: SExpr,
     ) -> Result<SExpr> {
-        let mut scalar_items: Vec<ScalarItem> = Vec::with_capacity(
-            window_info.arguments.len()
-                + window_info.partition_by_items.len()
-                + window_info.order_by_items.len(),
-        );
-        for arg in window_info.arguments.iter() {
-            scalar_items.push(arg.clone());
-        }
-        for part in window_info.partition_by_items.iter() {
-            scalar_items.push(part.clone());
-        }
-        for order in window_info.order_by_items.iter() {
-            scalar_items.push(order.order_by_item.clone())
-        }
-
-        let mut new_expr = child;
-        if !scalar_items.is_empty() {
-            let eval_scalar = EvalScalar {
-                items: scalar_items,
-            };
-            new_expr = SExpr::create_unary(eval_scalar.into(), new_expr);
-        }
-
         let window_plan = Window {
+            span: window_info.span,
             index: window_info.index,
             function: window_info.func.clone(),
+            arguments: window_info.arguments.clone(),
             partition_by: window_info.partition_by_items.clone(),
             order_by: window_info.order_by_items.clone(),
             frame: window_info.frame.clone(),
         };
-        new_expr = SExpr::create_unary(window_plan.into(), new_expr);
 
-        Ok(new_expr)
+        Ok(SExpr::create_unary(
+            Arc::new(window_plan.into()),
+            Arc::new(child),
+        ))
     }
 }
 
@@ -89,6 +73,7 @@ pub struct WindowInfo {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WindowFunctionInfo {
+    pub span: Span,
     pub index: IndexType,
     pub func: WindowFuncType,
     pub arguments: Vec<ScalarItem>,
@@ -261,6 +246,42 @@ impl<'a> WindowRewriter<'a> {
                     return_type: agg.return_type.clone(),
                 })
             }
+            WindowFuncType::Lag(lag) => {
+                let (new_arg, new_default) =
+                    self.replace_lag_lead_args(&mut agg_args, &window_func_name, lag)?;
+
+                WindowFuncType::Lag(LagLeadFunction {
+                    arg: Box::new(new_arg),
+                    offset: lag.offset,
+                    default: new_default,
+                    return_type: lag.return_type.clone(),
+                })
+            }
+            WindowFuncType::Lead(lead) => {
+                let (new_arg, new_default) =
+                    self.replace_lag_lead_args(&mut agg_args, &window_func_name, lead)?;
+
+                WindowFuncType::Lead(LagLeadFunction {
+                    arg: Box::new(new_arg),
+                    offset: lead.offset,
+                    default: new_default,
+                    return_type: lead.return_type.clone(),
+                })
+            }
+            WindowFuncType::FirstValue(func) => {
+                let new_arg = self.visit(&func.arg)?;
+                WindowFuncType::FirstValue(FirstLastFunction {
+                    arg: Box::new(new_arg),
+                    return_type: func.return_type.clone(),
+                })
+            }
+            WindowFuncType::LastValue(func) => {
+                let new_arg = self.visit(&func.arg)?;
+                WindowFuncType::LastValue(FirstLastFunction {
+                    arg: Box::new(new_arg),
+                    return_type: func.return_type.clone(),
+                })
+            }
             func => func.clone(),
         };
 
@@ -367,6 +388,7 @@ impl<'a> WindowRewriter<'a> {
 
         // create window info
         let window_info = WindowFunctionInfo {
+            span: window.span,
             index,
             func: func.clone(),
             arguments: agg_args,
@@ -384,6 +406,7 @@ impl<'a> WindowRewriter<'a> {
         );
 
         let replaced_window = WindowFunc {
+            span: window.span,
             display_name: window.display_name.clone(),
             func,
             partition_by: replaced_partition_items,
@@ -392,6 +415,56 @@ impl<'a> WindowRewriter<'a> {
         };
 
         Ok(replaced_window.into())
+    }
+
+    fn replace_lag_lead_args(
+        &mut self,
+        agg_args: &mut Vec<ScalarItem>,
+        window_func_name: &String,
+        f: &LagLeadFunction,
+    ) -> Result<(ScalarExpr, Option<Box<ScalarExpr>>)> {
+        let new_arg = self.visit(&f.arg)?;
+        let new_default = match &f.default {
+            None => None,
+            Some(d) => {
+                let d = self.visit(d)?;
+                let replaced_default = if let ScalarExpr::BoundColumnRef(column_ref) = &d {
+                    agg_args.push(ScalarItem {
+                        index: column_ref.column.index,
+                        scalar: d.clone(),
+                    });
+                    column_ref.clone().into()
+                } else {
+                    let name = format!("{}_default_value", &window_func_name);
+                    let index = self
+                        .metadata
+                        .write()
+                        .add_derived_column(name.clone(), d.data_type()?);
+
+                    let column_binding = ColumnBinding {
+                        database_name: None,
+                        table_name: None,
+                        table_index: None,
+                        column_name: name,
+                        index,
+                        data_type: Box::new(d.data_type()?),
+                        visibility: Visibility::Visible,
+                    };
+                    agg_args.push(ScalarItem {
+                        index,
+                        scalar: d.clone(),
+                    });
+
+                    BoundColumnRef {
+                        span: d.span(),
+                        column: column_binding,
+                    }
+                    .into()
+                };
+                Some(Box::new(replaced_default))
+            }
+        };
+        Ok((new_arg, new_default))
     }
 }
 

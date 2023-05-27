@@ -19,14 +19,17 @@ use std::sync::Arc;
 use common_catalog::table_context::TableContext;
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_exception::Span;
 use common_expression::types::DataType;
 use common_expression::types::NumberDataType;
 use common_expression::Scalar;
+use educe::Educe;
 use enum_as_inner::EnumAsInner;
 use serde::Deserialize;
 use serde::Serialize;
 
 use super::AggregateFunction;
+use super::FirstLastFunction;
 use crate::binder::WindowOrderByInfo;
 use crate::optimizer::ColumnSet;
 use crate::optimizer::Distribution;
@@ -36,17 +39,24 @@ use crate::optimizer::RelationalProperty;
 use crate::optimizer::RequiredProperty;
 use crate::optimizer::StatInfo;
 use crate::optimizer::Statistics;
+use crate::plans::LagLeadFunction;
 use crate::plans::Operator;
 use crate::plans::RelOp;
 use crate::plans::ScalarItem;
 use crate::IndexType;
+use crate::ScalarExpr;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash)]
 pub struct Window {
+    #[educe(PartialEq(ignore), Eq(ignore), Hash(ignore))]
+    pub span: Span,
+
     // aggregate scalar expressions, such as: sum(col1), count(*);
     // or general window functions, such as: row_number(), rank();
     pub index: IndexType,
     pub function: WindowFuncType,
+    pub arguments: Vec<ScalarItem>,
 
     // partition by scalar expressions
     pub partition_by: Vec<ScalarItem>,
@@ -62,14 +72,7 @@ impl Window {
 
         used_columns.insert(self.index);
 
-        if let WindowFuncType::Aggregate(agg) = &self.function {
-            for scalar in &agg.args {
-                used_columns = used_columns
-                    .union(&scalar.used_columns())
-                    .cloned()
-                    .collect();
-            }
-        }
+        used_columns.extend(self.function.used_columns());
 
         for part in self.partition_by.iter() {
             used_columns.insert(part.index);
@@ -214,6 +217,10 @@ pub enum WindowFuncType {
     Rank,
     DenseRank,
     PercentRank,
+    Lag(LagLeadFunction),
+    Lead(LagLeadFunction),
+    FirstValue(FirstLastFunction),
+    LastValue(FirstLastFunction),
 }
 
 impl WindowFuncType {
@@ -229,6 +236,40 @@ impl WindowFuncType {
             ))),
         }
     }
+
+    pub fn get_general_window_func(
+        name: &str,
+        arg: ScalarExpr,
+        offset: Option<u64>,
+        default: Option<ScalarExpr>,
+        return_type: DataType,
+    ) -> Result<WindowFuncType> {
+        match name {
+            "lag" => Ok(WindowFuncType::Lag(LagLeadFunction {
+                arg: Box::new(arg),
+                offset: offset.unwrap_or(1),
+                default: default.map(Box::new),
+                return_type: Box::new(return_type),
+            })),
+            "lead" => Ok(WindowFuncType::Lead(LagLeadFunction {
+                arg: Box::new(arg),
+                offset: offset.unwrap_or(1),
+                default: default.map(Box::new),
+                return_type: Box::new(return_type),
+            })),
+            "first_value" | "first" => Ok(WindowFuncType::FirstValue(FirstLastFunction {
+                arg: Box::new(arg),
+                return_type: Box::new(return_type),
+            })),
+            "last_value" | "last" => Ok(WindowFuncType::LastValue(FirstLastFunction {
+                arg: Box::new(arg),
+                return_type: Box::new(return_type),
+            })),
+            _ => Err(ErrorCode::UnknownFunction(format!(
+                "Unknown window function: {name}"
+            ))),
+        }
+    }
     pub fn func_name(&self) -> String {
         match self {
             WindowFuncType::Aggregate(agg) => agg.func_name.to_string(),
@@ -236,6 +277,10 @@ impl WindowFuncType {
             WindowFuncType::Rank => "rank".to_string(),
             WindowFuncType::DenseRank => "dense_rank".to_string(),
             WindowFuncType::PercentRank => "percent_rank".to_string(),
+            WindowFuncType::Lag(_) => "lag".to_string(),
+            WindowFuncType::Lead(_) => "lead".to_string(),
+            WindowFuncType::FirstValue(_) => "first_value".to_string(),
+            WindowFuncType::LastValue(_) => "last_value".to_string(),
         }
     }
 
@@ -243,6 +288,18 @@ impl WindowFuncType {
         match self {
             WindowFuncType::Aggregate(agg) => {
                 agg.args.iter().flat_map(|arg| arg.used_columns()).collect()
+            }
+            WindowFuncType::Lag(func) | WindowFuncType::Lead(func) => match &func.default {
+                None => func.arg.used_columns(),
+                Some(d) => func
+                    .arg
+                    .used_columns()
+                    .union(&d.used_columns())
+                    .cloned()
+                    .collect(),
+            },
+            WindowFuncType::FirstValue(func) | WindowFuncType::LastValue(func) => {
+                func.arg.used_columns()
             }
             _ => ColumnSet::new(),
         }
@@ -255,6 +312,10 @@ impl WindowFuncType {
                 DataType::Number(NumberDataType::UInt64)
             }
             WindowFuncType::PercentRank => DataType::Number(NumberDataType::Float64),
+            WindowFuncType::Lag(lag) => *lag.return_type.clone(),
+            WindowFuncType::Lead(lead) => *lead.return_type.clone(),
+            WindowFuncType::FirstValue(first) => *first.return_type.clone(),
+            WindowFuncType::LastValue(last) => *last.return_type.clone(),
         }
     }
 }

@@ -404,7 +404,7 @@ impl<'ast> Visitor<'ast> for AstFormatVisitor {
         self.children.push(node);
     }
 
-    fn visit_count_all(&mut self, _span: Span) {
+    fn visit_count_all(&mut self, _span: Span, _window: &'ast Option<Window>) {
         let name = "Function CountAll".to_string();
         let format_ctx = AstFormatContext::new(name);
         let node = FormatTreeNode::new(format_ctx);
@@ -1496,6 +1496,28 @@ impl<'ast> Visitor<'ast> for AstFormatVisitor {
         self.children.push(node);
     }
 
+    fn visit_create_index(&mut self, stmt: &'ast CreateIndexStmt) {
+        self.visit_index_ref(&stmt.index_name);
+        let index_child = self.children.pop().unwrap();
+        self.visit_query(&stmt.query);
+        let query_child = self.children.pop().unwrap();
+
+        let name = "CreateIndex".to_string();
+        let format_ctx = AstFormatContext::with_children(name, 2);
+        let node = FormatTreeNode::with_children(format_ctx, vec![index_child, query_child]);
+        self.children.push(node);
+    }
+
+    fn visit_drop_index(&mut self, stmt: &'ast DropIndexStmt) {
+        self.visit_index_ref(&stmt.index);
+        let child = self.children.pop().unwrap();
+
+        let name = "DropIndex".to_string();
+        let format_ctx = AstFormatContext::with_children(name, 1);
+        let node = FormatTreeNode::with_children(format_ctx, vec![child]);
+        self.children.push(node);
+    }
+
     fn visit_show_users(&mut self) {
         let name = "ShowUsers".to_string();
         let format_ctx = AstFormatContext::new(name);
@@ -2069,6 +2091,36 @@ impl<'ast> Visitor<'ast> for AstFormatVisitor {
         let child = FormatTreeNode::new(share_format_ctx);
 
         let name = "ShowGrantsOfShare".to_string();
+        let format_ctx = AstFormatContext::with_children(name, 1);
+        let node = FormatTreeNode::with_children(format_ctx, vec![child]);
+        self.children.push(node);
+    }
+
+    fn visit_create_data_mask_policy(&mut self, stmt: &'ast CreateDatamaskPolicyStmt) {
+        let ctx = AstFormatContext::new(format!("DataMaskPolicyName {}", stmt.name));
+        let child = FormatTreeNode::new(ctx);
+
+        let name = "CreateDatamaskPolicy".to_string();
+        let format_ctx = AstFormatContext::with_children(name, 1);
+        let node = FormatTreeNode::with_children(format_ctx, vec![child]);
+        self.children.push(node);
+    }
+
+    fn visit_drop_data_mask_policy(&mut self, stmt: &'ast DropDatamaskPolicyStmt) {
+        let ctx = AstFormatContext::new(format!("DataMaskPolicyName {}", stmt.name));
+        let child = FormatTreeNode::new(ctx);
+
+        let name = "DropDatamaskPolicy".to_string();
+        let format_ctx = AstFormatContext::with_children(name, 1);
+        let node = FormatTreeNode::with_children(format_ctx, vec![child]);
+        self.children.push(node);
+    }
+
+    fn visit_desc_data_mask_policy(&mut self, stmt: &'ast DescDatamaskPolicyStmt) {
+        let ctx = AstFormatContext::new(format!("DataMaskPolicyName {}", stmt.name));
+        let child = FormatTreeNode::new(ctx);
+
+        let name = "DescDatamaskPolicy".to_string();
         let format_ctx = AstFormatContext::with_children(name, 1);
         let node = FormatTreeNode::with_children(format_ctx, vec![child]);
         self.children.push(node);

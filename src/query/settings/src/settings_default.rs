@@ -143,7 +143,7 @@ impl DefaultSettings {
                     display_in_show_settings: true,
                 }),
                 ("enable_dphyp", DefaultSettingValue {
-                    value: UserSettingValue::UInt64(0),
+                    value: UserSettingValue::UInt64(1),
                     desc: "Enables dphyp join order algorithm.",
                     possible_values: None,
                     display_in_show_settings: true,
@@ -303,6 +303,12 @@ impl DefaultSettings {
                     possible_values: None,
                     // license key should not be reported
                     display_in_show_settings: false,
+                }),
+                ("table_lock_expire_secs", DefaultSettingValue {
+                    value: UserSettingValue::UInt64(5),
+                    desc: "Sets the seconds that the table lock will expire in.",
+                    possible_values: None,
+                    display_in_show_settings: true,
                 }),
             ]);
 

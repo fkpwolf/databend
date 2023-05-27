@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use common_ast::ast::Expr;
 use common_ast::ast::Identifier;
 use common_ast::ast::Literal;
@@ -65,6 +67,10 @@ impl<'a> Visitor<'a> for SrfCollector {
                 params: params.to_vec(),
                 window: over.clone(),
             });
+        } else {
+            for arg in args.iter() {
+                self.visit_expr(arg);
+            }
         }
     }
 }
@@ -182,6 +188,9 @@ impl Binder {
 
         let project_set = ProjectSet { srfs: items };
 
-        Ok(SExpr::create_unary(project_set.into(), s_expr))
+        Ok(SExpr::create_unary(
+            Arc::new(project_set.into()),
+            Arc::new(s_expr),
+        ))
     }
 }

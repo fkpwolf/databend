@@ -205,6 +205,10 @@ impl<'a> Binder {
                     .await?
             }
             Statement::ShowSettings { like } => self.bind_show_settings(bind_context, like).await?,
+            Statement::ShowIndexes => {
+                self.bind_rewrite_to_query(bind_context, "SELECT * FROM system.indexes", RewriteKind::ShowProcessList)
+                    .await?
+            }
             // Catalogs
             Statement::ShowCatalogs(stmt) => self.bind_show_catalogs(bind_context, stmt).await?,
             Statement::ShowCreateCatalog(stmt) => self.bind_show_create_catalogs(stmt).await?,
@@ -219,8 +223,9 @@ impl<'a> Binder {
             Statement::UndropDatabase(stmt) => self.bind_undrop_database(stmt).await?,
             Statement::AlterDatabase(stmt) => self.bind_alter_database(stmt).await?,
             Statement::UseDatabase { database } => {
+                let database = normalize_identifier(database, &self.name_resolution_ctx).name;
                 Plan::UseDatabase(Box::new(UseDatabasePlan {
-                    database: database.name.clone(),
+                    database,
                 }))
             }
             // Columns
@@ -247,6 +252,10 @@ impl<'a> Binder {
             Statement::CreateView(stmt) => self.bind_create_view(stmt).await?,
             Statement::AlterView(stmt) => self.bind_alter_view(stmt).await?,
             Statement::DropView(stmt) => self.bind_drop_view(stmt).await?,
+
+            // Indexes
+            Statement::CreateIndex(stmt) => self.bind_create_index(bind_context, stmt).await?,
+            Statement::DropIndex(stmt) => self.bind_drop_index(stmt).await?,
 
             // Users
             Statement::CreateUser(stmt) => self.bind_create_user(stmt).await?,
@@ -474,6 +483,15 @@ impl<'a> Binder {
             Statement::ShowGrantsOfShare(stmt) => {
                 self.bind_show_grants_of_share(stmt).await?
             }
+            Statement::CreateDatamaskPolicy(stmt) => {
+                self.bind_create_data_mask_policy(stmt).await?
+            }
+            Statement::DropDatamaskPolicy(stmt) => {
+                self.bind_drop_data_mask_policy(stmt).await?
+            }
+            Statement::DescDatamaskPolicy(stmt) => {
+                self.bind_desc_data_mask_policy(stmt).await?
+            }
         };
         Ok(plan)
     }
@@ -537,5 +555,10 @@ impl<'a> Binder {
             .unwrap_or_else(|| self.ctx.get_current_database());
         let object_name = normalize_identifier(object, &self.name_resolution_ctx).name;
         (catalog_name, database_name, object_name)
+    }
+
+    /// Normalize <identifier>
+    pub fn normalize_object_identifier(&self, ident: &Identifier) -> String {
+        normalize_identifier(ident, &self.name_resolution_ctx).name
     }
 }
